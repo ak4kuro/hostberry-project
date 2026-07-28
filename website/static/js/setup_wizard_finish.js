@@ -26,10 +26,7 @@
         return;
       }
       if (data && data.reboot) {
-        showAlert('info', t('setup_wizard.reboot_pending', d(
-          'Setup complete. The device is rebooting to apply WiFi settings. Reconnect in a minute.',
-          'Configuración guardada. El equipo se reinicia para aplicar el WiFi. Vuelve a conectarte en un minuto.'
-        )));
+        showAlert('info', t('setup_wizard.reboot_pending', 'Configuración guardada. El equipo se reinicia para aplicar el WiFi. Vuelve a conectarte en un minuto.'));
         var dest = (data && data.redirect) || '/first-login';
         var join = dest.indexOf('?') >= 0 ? '&' : '?';
         var target = dest + join + currentLangQS();

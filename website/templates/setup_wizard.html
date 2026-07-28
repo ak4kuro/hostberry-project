@@ -61,9 +61,9 @@
             <div class="wizard-page-inner">
                 <h2 class="wizard-page-title">
                     <i class="bi bi-router me-2"></i>
-                    {{ call .t "setup_wizard.step_band_title" "Elegir banda WiFi" }}
+                    <span id="wizard-band-step-title">{{ call .t "setup_wizard.step_band_title" "Elegir banda WiFi" }}</span>
                 </h2>
-                <p class="wizard-page-desc text-muted">{{ call .t "setup_wizard.step_band_desc" "Selecciona la banda WiFi que quieres usar. Luego buscaremos las redes de esa frecuencia." }}</p>
+                <p class="wizard-page-desc text-muted" id="wizard-band-step-desc">{{ call .t "setup_wizard.step_band_desc" "Selecciona la banda WiFi que quieres usar. Luego buscaremos las redes de esa frecuencia." }}</p>
                 <div class="card glass-card wizard-card">
                     <div class="card-body">
                         <div id="wizard-band-selector">
@@ -89,9 +89,10 @@
                                     </div>
                                 </div>
                             </div>
-                            <p class="text-muted small mt-3 mb-0">{{ call .t "setup_wizard.band_select_help" "Durante la configuración el AP usa 2.4 GHz para que no se corte tu conexión. La banda elegida se aplicará al reiniciar al final del asistente." }}</p>
+                            <p class="text-muted small mt-3 mb-0" id="wizard-band-step-help">{{ call .t "setup_wizard.band_select_help" "Durante la configuración el AP usa 2.4 GHz para que no se corte tu conexión. La banda elegida se aplicará al reiniciar al final del asistente." }}</p>
                         </div>
-                        <div class="wizard-step1-actions d-flex justify-content-end mt-4">
+                        <div class="wizard-step1-actions d-flex justify-content-between mt-4">
+                            <button type="button" class="btn btn-sm btn-outline-secondary text-nowrap" id="wizard-back-2">{{ call .t "setup_wizard.back" "Atrás" }}</button>
                             <button type="button" class="btn btn-sm btn-primary text-nowrap" id="wizard-band-next" disabled>
                                 <span class="btn-text">{{ call .t "setup_wizard.next" "Siguiente" }}</span>
                             </button>
@@ -184,6 +185,11 @@
                             <label class="form-label" for="wizard-ap-ssid">{{ call .t "setup_wizard.ssid_name" "Nombre de la red (SSID)" }}</label>
                             <input type="text" class="form-control" id="wizard-ap-ssid" value="hostberry" placeholder="hostberry" maxlength="32">
                             <div class="form-text" id="wizard-ap-ssid-help">{{ call .t "setup_wizard.ssid_24_help" "Red 2.4 GHz (hostberry)" }}</div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" for="wizard-ap-channel">{{ call .t "setup_wizard.ap_channel_label" "Canal del punto de acceso" }}</label>
+                            <select class="form-select" id="wizard-ap-channel"></select>
+                            <div class="form-text" id="wizard-ap-channel-help"></div>
                         </div>
                         <div id="wizard-ap-channel-note" class="alert alert-info small py-2 d-none" role="note">
                             <i class="bi bi-broadcast-pin me-2"></i><span></span>
