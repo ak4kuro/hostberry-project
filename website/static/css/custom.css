@@ -802,6 +802,10 @@ body.light-theme.hb-page-wizard .lang-dropdown .lang-toggle:hover {
   height: 2px;
   background: var(--hb-border);
 }
+.setup-wizard-header .step-dot.d-none,
+.setup-wizard-header .step-line.d-none {
+  display: none !important;
+}
 .setup-wizard-pages {
   flex: 1;
   min-height: 0;
