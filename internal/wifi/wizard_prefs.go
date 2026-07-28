@@ -40,7 +40,7 @@ func PersistPreferredBandForReboot(band string) error {
 	if band != band24GHz && band != band5GHz {
 		return nil
 	}
-	result := EnsureDualBandHostapd("", false)
+	result := EnsureDualBandHostapdForBand("", false, band)
 	if success, ok := result["success"].(bool); ok && !success {
 		if errMsg, ok := result["error"].(string); ok && errMsg != "" {
 			return fmt.Errorf("%s", errMsg)

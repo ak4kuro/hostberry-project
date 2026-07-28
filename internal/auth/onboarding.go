@@ -18,7 +18,7 @@ func IsInitialSetupPending() bool {
 
 func bootstrapSetupAdminUser() *models.User {
 	var user models.User
-	if err := database.DB.Where("username = ? AND is_active = ?", "admin", true).First(&user).Error; err != nil {
+	if err := database.DB.Where("role = ? AND is_active = ?", "admin", true).First(&user).Error; err != nil {
 		return nil
 	}
 	if !IsSetupWizardRequired(&user) {

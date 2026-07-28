@@ -694,7 +694,7 @@
         } else {
           showConnectResult(data);
         }
-        setStep(3);
+        setStep(4);
       } else {
         // El cuerpo ya se leyó en `data`; usamos su error (no se puede volver a leer resp.json()).
         var errMsg = (data && data.error) ? String(data.error) : t('setup_wizard.error_connect', d('Error connecting', 'Error al conectar'));

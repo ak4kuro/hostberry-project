@@ -694,6 +694,7 @@ func VerifyWiFiPassword(ssid, password, interfaceName, country string) map[strin
 	result := make(map[string]interface{})
 	result["success"] = false
 	result["error"] = ""
+	result["auth_failed"] = false
 
 	if ssid == "" {
 		result["error"] = "SSID requerido"
@@ -710,6 +711,21 @@ func VerifyWiFiPassword(ssid, password, interfaceName, country string) map[strin
 
 	_ = runSudoSilently("rfkill", "unblock", "wifi")
 	_ = runSudoSilently("ip", "link", "set", interfaceName, "up")
+
+	// Radio única AP+STA: si el AP (hostapd) está activo en esta radio, debemos liberarla para poder
+	// escanear y asociar en otra banda/canal (incluido DFS, donde la STA actúa solo como cliente). Si
+	// no lo hacemos, la asociación nunca completa y una contraseña correcta se reporta como errónea.
+	// Tras verificar restauramos el AP para no dejar caído el portal del asistente.
+	apWasActive := concurrentAPInterfacePresent() && hostapdServiceActive()
+	if apWasActive {
+		_, _ = execPrivilegedOutput("systemctl stop hostapd")
+		time.Sleep(700 * time.Millisecond)
+	}
+	defer func() {
+		if apWasActive {
+			restoreAPAfterConnect(interfaceName)
+		}
+	}()
 
 	// Crear directorio de config temporal si no existe
 	if _, err := os.Stat(WpaSupplicantConfigDir); os.IsNotExist(err) {
@@ -812,27 +828,66 @@ func VerifyWiFiPassword(ssid, password, interfaceName, country string) map[strin
 		_, _ = runPrivilegedCommandFast("wpa_cli", "-i", interfaceName, "-p", socketDir, "set_network", netID, "key_mgmt", "NONE")
 	}
 
-	// Habilitar red
+	// Habilitar red e intentar asociar para verificar la credencial.
 	_, _ = runPrivilegedCommandFast("wpa_cli", "-i", interfaceName, "-p", socketDir, "enable_network", netID)
-
-	// Intentar conectar por un corto tiempo para verificar
 	_, _ = runPrivilegedCommandFast("wpa_cli", "-i", interfaceName, "-p", socketDir, "select_network", netID)
+	_, _ = runPrivilegedCommandFast("wpa_cli", "-i", interfaceName, "-p", socketDir, "reconnect")
 
-	// Esperar un momento y verificar estado
-	time.Sleep(3 * time.Second)
-	statusOut, _ := runPrivilegedCommandFast("wpa_cli", "-i", interfaceName, "-p", socketDir, "status")
+	// La asociación + handshake WPA en radio única (la antena debe abandonar el canal del AP,
+	// escanear y asociar) puede tardar varios segundos: esperar solo 3 s provocaba falsos negativos
+	// (una clave correcta se reportaba como "Contraseña incorrecta" y el asistente no avanzaba).
+	// Sondeamos el estado durante una ventana amplia y detectamos pronto el fallo de autenticación
+	// (clave incorrecta) sin tener que esperar al timeout completo. Misma lógica que ConnectWiFi.
+	completed := false
+	authFailed := false
+	sawHandshake := false
+	handshakeDrops := 0
+	for i := 0; i < 30; i++ {
+		time.Sleep(1 * time.Second)
+		statusOut, _ := runPrivilegedCommandFast("wpa_cli", "-i", interfaceName, "-p", socketDir, "status")
+		// Solo wpa_state=COMPLETED garantiza que el handshake WPA terminó; ASSOCIATED puede
+		// aparecer con una contraseña incorrecta antes de que falle la autenticación.
+		if strings.Contains(statusOut, "wpa_state=COMPLETED") {
+			completed = true
+			break
+		}
+		if password == "" {
+			continue
+		}
+		// Detección temprana directa (algunos drivers exponen el motivo en el estado).
+		if strings.Contains(statusOut, "AUTH_FAILED") || strings.Contains(statusOut, "WRONG_KEY") {
+			authFailed = true
+			break
+		}
+		// Detección por oscilación del handshake: con clave errónea wpa_supplicant alcanza el
+		// 4-way handshake y vuelve a SCANNING/DISCONNECTED sin completar, de forma repetida.
+		if strings.Contains(statusOut, "wpa_state=4WAY_HANDSHAKE") {
+			sawHandshake = true
+		} else if sawHandshake && (strings.Contains(statusOut, "wpa_state=SCANNING") || strings.Contains(statusOut, "wpa_state=DISCONNECTED")) {
+			handshakeDrops++
+			sawHandshake = false
+			if handshakeDrops >= 2 {
+				authFailed = true
+				break
+			}
+		}
+		if handshakeDrops >= 1 && i >= 10 && i%4 == 0 && wifiAuthFailureDetected(interfaceName, statusOut) {
+			authFailed = true
+			break
+		}
+	}
 
-	// Eliminar red temporal
+	// Eliminar red temporal: la conexión definitiva se difiere al finalizar el asistente.
 	_, _ = runPrivilegedCommandFast("wpa_cli", "-i", interfaceName, "-p", socketDir, "remove_network", netID)
 
-	// Verificar si la conexión fue exitosa (aunque sea momentánea)
-	if strings.Contains(statusOut, "wpa_state=COMPLETED") || strings.Contains(statusOut, "wpa_state=ASSOCIATED") {
+	if completed {
 		result["success"] = true
 		result["message"] = "Contraseña verificada correctamente"
+	} else if authFailed {
+		result["auth_failed"] = true
+		result["error"] = "Contraseña incorrecta. Verifica la clave de «" + ssid + "» e inténtalo de nuevo."
 	} else {
-		// Si no hay confirmación de conexión exitosa, la contraseña es incorrecta
-		// o no se pudo conectar (en cualquier caso, no podemos verificarla como válida)
-		result["error"] = "Contraseña incorrecta. Verifica el SSID y la contraseña."
+		result["error"] = "No se pudo verificar la contraseña de «" + ssid + "». Comprueba que la red esté dentro de alcance e inténtalo de nuevo."
 	}
 
 	return result

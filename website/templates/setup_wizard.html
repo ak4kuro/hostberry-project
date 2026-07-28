@@ -181,6 +181,17 @@
                 <div class="card glass-card wizard-card">
                     <div class="card-body">
                         <div class="mb-3">
+                            <label class="form-label">{{ call .t "setup_wizard.ap_band_label" "Banda del punto de acceso" }}</label>
+                            <div class="row g-2" id="wizard-ap-band-selector">
+                                <div class="col-6"><button type="button" class="btn btn-outline-primary w-100 wizard-ap-band-option selected" data-band="2.4" aria-pressed="true">2.4 GHz</button></div>
+                                <div class="col-6"><button type="button" class="btn btn-outline-primary w-100 wizard-ap-band-option" data-band="5" aria-pressed="false">5 GHz</button></div>
+                            </div>
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label" for="wizard-ap-channel">{{ call .t "setup_wizard.ap_channel_label" "Canal del punto de acceso" }}</label>
+                            <select class="form-select" id="wizard-ap-channel"></select>
+                        </div>
+                        <div class="mb-3">
                             <label class="form-label" for="wizard-ap-ssid">{{ call .t "setup_wizard.ssid_name" "Nombre de la red (SSID)" }}</label>
                             <input type="text" class="form-control" id="wizard-ap-ssid" value="hostberry" placeholder="hostberry" maxlength="32">
                             <div class="form-text" id="wizard-ap-ssid-help">{{ call .t "setup_wizard.ssid_24_help" "Red 2.4 GHz (hostberry)" }}</div>

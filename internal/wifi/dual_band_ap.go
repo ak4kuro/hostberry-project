@@ -256,6 +256,17 @@ func ensureVirtualAP(phyName, iface string) error {
 // EnsureDualBandHostapd escribe perfiles 2.4/5 GHz y activa el AP según la banda de la STA.
 // Con una segunda radio (USB), emite también la banda complementaria en ap1.
 func EnsureDualBandHostapd(staInterface string, setupPending bool) map[string]interface{} {
+	return ensureDualBandHostapdImpl(staInterface, setupPending, "")
+}
+
+// EnsureDualBandHostapdForBand es como EnsureDualBandHostapd pero fuerza la banda activa del AP.
+// Se usa al finalizar el wizard: la STA aún no está conectada a la banda objetivo, así que
+// concurrentOperatingBand devolvería "2.4" y el AP quedaría con el SSID/canal equivocado.
+func EnsureDualBandHostapdForBand(staInterface string, setupPending bool, forcedBand string) map[string]interface{} {
+	return ensureDualBandHostapdImpl(staInterface, setupPending, forcedBand)
+}
+
+func ensureDualBandHostapdImpl(staInterface string, setupPending bool, forcedBand string) map[string]interface{} {
 	result := map[string]interface{}{"success": true}
 	if staInterface == "" {
 		staInterface = detectWiFiInterface()
@@ -270,11 +281,10 @@ func EnsureDualBandHostapd(staInterface string, setupPending bool) map[string]in
 
 	coldStartSetup := setupPending && !hostapdServiceActive()
 
-	// Durante el asistente, en una sola radio el AP principal SIEMPRE debe ser "hostberry" en
-	// 2.4 GHz (canal 6) para que cualquier dispositivo lo encuentre y se conecte. El 5 GHz solo
-	// se emite en una segunda radio (ap1) si existe. Si no se fuerza, apLinkFrequency() puede
-	// "arrastrar" el AP a 5 GHz (hostberry-5G) y dejarlo así en cada reinicio (bucle).
-	if setupPending {
+	// Si se fuerza una banda (p. ej. al finalizar el wizard), usarla directamente.
+	if forcedBand == band24GHz || forcedBand == band5GHz {
+		activeBand = forcedBand
+	} else if setupPending {
 		activeBand = band24GHz
 		if cfg.Band24.Channel < 1 || cfg.Band24.Channel > 14 {
 			cfg.Band24.Channel = 6

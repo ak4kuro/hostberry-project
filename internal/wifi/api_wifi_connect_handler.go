@@ -104,10 +104,14 @@ func WifiConnectHandler(c *fiber.Ctx) error {
 		if !isOpenNetwork && req.Password != "" {
 			verifyResult := VerifyWiFiPassword(req.SSID, req.Password, interfaceName, country)
 			if !verifyResult["success"].(bool) {
-				return c.Status(400).JSON(fiber.Map{
-					"success": false,
-					"error":   verifyResult["error"].(string),
-				})
+				authFailed, _ := verifyResult["auth_failed"].(bool)
+				if authFailed {
+					return c.Status(400).JSON(fiber.Map{
+						"success": false,
+						"error":   verifyResult["error"].(string),
+					})
+				}
+				log.Printf("[WIZARD] verificación de contraseña no concluyente para %q: %s — guardando red igualmente (conexión diferida)", req.SSID, verifyResult["error"])
 			}
 		}
 

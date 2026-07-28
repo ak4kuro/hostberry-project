@@ -236,7 +236,10 @@ func applySavedHostapdSecurity() {
 	cfg := wifi.LoadDualBandAPConfig(country)
 	
 	// Determinar la banda activa actual (ConcurrentOperatingBandExport devuelve "2.4" o "5")
-	activeBand := wifi.ConcurrentOperatingBandExport(wifi.DetectWiFiInterface())
+	activeBand := wifi.GetWizardPreferredBand()
+	if activeBand == "" {
+		activeBand = wifi.ConcurrentOperatingBandExport(wifi.DetectWiFiInterface())
+	}
 	if activeBand == "" {
 		activeBand = "2.4"
 	}
@@ -254,7 +257,7 @@ func applySavedHostapdSecurity() {
 		log.Printf("AP normal: aplicando configuración de seguridad guardada (SSID=%s, security=%s)", profile.SSID, profile.Security)
 		
 		// Usar EnsureDualBandHostapd con setupPending=false para aplicar la configuración guardada
-		result := wifi.EnsureDualBandHostapd("", false)
+		result := wifi.EnsureDualBandHostapdForBand("", false, activeBand)
 		if success, ok := result["success"].(bool); ok && !success {
 			log.Printf("AP normal: error aplicando configuración de seguridad: %v", result["error"])
 		}

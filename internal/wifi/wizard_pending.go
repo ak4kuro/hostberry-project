@@ -2,6 +2,7 @@ package wifi
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -125,9 +126,12 @@ func PersistPendingWiFiForReboot() error {
 		networkBlock = fmt.Sprintf("network={\n\tssid=\"%s\"\n\tkey_mgmt=NONE\n}", strings.ReplaceAll(w.SSID, "\\", "\\\\"))
 	}
 
-	configContent := fmt.Sprintf("ctrl_interface=DIR=%s GROUP=netdev\nupdate_config=1\ncountry=%s\n\n%s", WpaSupplicantCtrlDir, country, networkBlock)
+	configContent := fmt.Sprintf("ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev\nupdate_config=1\ncountry=%s\n\n%s", country, networkBlock)
+	log.Printf("[WIZARD-PERSIST] escribiendo config wpa_supplicant para iface=%s ssid=%s country=%s", iface, w.SSID, country)
 	if _, err := writeWpaSupplicantConfig(iface, configContent); err != nil {
+		log.Printf("[WIZARD-PERSIST] ERROR writeWpaSupplicantConfig: %v", err)
 		return err
 	}
+	log.Printf("[WIZARD-PERSIST] config wpa_supplicant escrita OK para iface=%s", iface)
 	return nil
 }

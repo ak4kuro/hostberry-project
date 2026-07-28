@@ -186,8 +186,10 @@ func RequireAuth(c *fiber.Ctx) error {
 	// portal cautivo (Android CNA) no conserve la cookie ni envíe Origin/Referer en los POST.
 	// Auto-autenticamos al admin de arranque para los endpoints del wizard cuando la petición
 	// llega desde la red del AP (192.168.4.0/24), o es de mismo origen, o es un método seguro.
+	// Desde la LAN también se auto-autentica: el wizard es un flujo de bootstrap que debe funcionar
+	// desde cualquier red, y algunos navegadores no envían Origin/Referer en POST same-origin.
 	if strings.HasPrefix(path, "/api/") && isSetupWizardAPIPath(path) && auth.IsInitialSetupPending() {
-		if !isUnsafeMethod(c.Method()) || isAPCaptiveClient(c) || isSameOriginForCookieAuth(c) {
+		if !isUnsafeMethod(c.Method()) || isAPCaptiveClient(c) || isSameOriginForCookieAuth(c) || isLANClient(c) {
 			if user, err := auth.BootstrapSetupSessionUser(c); err == nil && user != nil {
 				c.Locals("user", user)
 				c.Locals("user_id", user.ID)
@@ -576,5 +578,21 @@ func isAPCaptiveClient(c *fiber.Ctx) bool {
 		return false
 	}
 	return apNet.Contains(ip)
+}
+
+// isLANClient indica si la petición proviene de una red local privada
+// (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) o loopback.
+func isLANClient(c *fiber.Ctx) bool {
+	ip := net.ParseIP(strings.TrimSpace(c.IP()))
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() {
+		return true
+	}
+	if ip.IsPrivate() {
+		return true
+	}
+	return false
 }
 

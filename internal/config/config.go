@@ -144,5 +144,10 @@ func Normalize(onNormalized func(string, ...interface{})) {
 	key := strings.TrimSpace(AppConfig.Server.TLSKeyFile)
 	if cert != "" && key != "" {
 		AppConfig.Security.EnforceHTTPS = true
+	} else if AppConfig.Security.EnforceHTTPS {
+		AppConfig.Security.EnforceHTTPS = false
+		if onNormalized != nil {
+			onNormalized("logs.config_enforce_https_disabled", "enforce_https desactivado: no hay certificados TLS configurados")
+		}
 	}
 }

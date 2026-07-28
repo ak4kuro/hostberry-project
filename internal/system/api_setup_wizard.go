@@ -1,6 +1,7 @@
 package system
 
 import (
+	"log"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -41,12 +42,24 @@ func SetupWizardCompleteAPIHandler(c *fiber.Ctx) error {
 		// disco (config dnsmasq + servicio captivo deshabilitado + sysctl), de modo que tras el
 		// reinicio el AP "hostberry" da Internet y el panel queda accesible en hostberry.local.
 		hostapd.ApplyNormalAPMode()
-		if band := wifi.GetWizardPreferredBand(); band != "" {
-			_ = wifi.PersistPreferredBandForReboot(band)
+		prefBand := wifi.GetWizardPreferredBand()
+		log.Printf("[WIZARD-COMPLETE] banda preferida: %q", prefBand)
+		if prefBand != "" {
+			if err := wifi.PersistPreferredBandForReboot(prefBand); err != nil {
+				log.Printf("[WIZARD-COMPLETE] ERROR PersistPreferredBandForReboot: %v", err)
+			} else {
+				log.Printf("[WIZARD-COMPLETE] PersistPreferredBandForReboot OK (band=%s)", prefBand)
+			}
 		}
 		// Aplicar la red WiFi elegida en el asistente: se deja lista en wpa_supplicant para que el
 		// equipo se conecte al arrancar tras el reinicio (la conexión se difiere a "Finalizar").
-		_ = wifi.PersistPendingWiFiForReboot()
+		pending, hasPending := wifi.GetWizardPendingWiFi()
+		log.Printf("[WIZARD-COMPLETE] red pendiente: exists=%v ssid=%q iface=%q", hasPending, pending.SSID, pending.Interface)
+		if err := wifi.PersistPendingWiFiForReboot(); err != nil {
+			log.Printf("[WIZARD-COMPLETE] ERROR PersistPendingWiFiForReboot: %v", err)
+		} else {
+			log.Printf("[WIZARD-COMPLETE] PersistPendingWiFiForReboot OK")
+		}
 		wifi.ClearWizardPendingWiFi()
 		// Devolver wlan0 a NetworkManager: durante el asistente estuvo bajo un supplicant dedicado
 		// (sin autoscan). Al reiniciar, NM debe gestionarlo de nuevo para la autoconexión normal.
