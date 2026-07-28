@@ -121,6 +121,80 @@
 
     updateApChannelNote();
     updateHostapdBandUI();
+    updateBandStepTexts();
+  }
+
+  // updateBandStepTexts adapta el paso 2 al tipo de conexión: por WiFi la banda elegida decide en
+  // qué frecuencia se buscan las redes upstream; por cable solo define la banda del AP HostBerry.
+  function updateBandStepTexts() {
+    var isCable = selectedConnectionType === 'cable';
+    var titleEl = document.getElementById('wizard-band-step-title');
+    var descEl = document.getElementById('wizard-band-step-desc');
+    var helpEl = document.getElementById('wizard-band-step-help');
+    if (titleEl) {
+      titleEl.textContent = isCable
+        ? t('setup_wizard.step_band_title_ap', d('Choose the HostBerry network band', 'Elegir banda de la red HostBerry'))
+        : t('setup_wizard.step_band_title', d('Choose WiFi band', 'Elegir banda WiFi'));
+    }
+    if (descEl) {
+      descEl.textContent = isCable
+        ? t('setup_wizard.step_band_desc_ap', d('Select the band your HostBerry will broadcast on (2.4 GHz or 5 GHz).', 'Selecciona la banda en la que emitirá tu HostBerry (2.4 GHz o 5 GHz).'))
+        : t('setup_wizard.step_band_desc', d('Select the WiFi band you want to use. We will then look for networks on that frequency.', 'Selecciona la banda WiFi que quieres usar. Luego buscaremos las redes de esa frecuencia.'));
+    }
+    if (helpEl) {
+      helpEl.textContent = isCable
+        ? t('setup_wizard.band_select_help_ap', d('The chosen band applies to the HostBerry access point after the device reboots at the end of the wizard.', 'La banda elegida se aplicará al punto de acceso HostBerry al reiniciar al final del asistente.'))
+        : t('setup_wizard.band_select_help', d('During setup the AP stays on 2.4 GHz so your connection is not dropped. The chosen band applies after the reboot at the end of the wizard.', 'Durante la configuración el AP usa 2.4 GHz para que no se corte tu conexión. La banda elegida se aplicará al reiniciar al final del asistente.'));
+    }
+  }
+
+  // channelsForBand devuelve los canales válidos del AP en cada banda: 1-13 en 2.4 GHz y los
+  // canales estándar de 5 GHz.
+  function channelsForBand(band) {
+    if (band === '5') return [36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 149, 153, 157, 161, 165];
+    return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13];
+  }
+
+  function defaultChannelForBand(band) {
+    var connCh = setupInfo.connectedChannel;
+    var connBand = connCh ? (connCh > 14 ? '5' : '2.4') : null;
+    if (connCh && connBand === band && channelsForBand(band).indexOf(connCh) >= 0) return connCh;
+    var def = Number(setupInfo.defaultApChannel);
+    if (band === '5') return (def >= 36 && channelsForBand('5').indexOf(def) >= 0) ? def : 36;
+    return (def >= 1 && def <= 13) ? def : 6;
+  }
+
+  // fillApChannelOptions rellena el selector de canal del paso 4 con los canales de la banda
+  // elegida y mantiene la elección del usuario si sigue siendo válida.
+  function fillApChannelOptions() {
+    var select = document.getElementById('wizard-ap-channel');
+    if (!select) return;
+    var band = setupInfo.band === '5' ? '5' : '2.4';
+    var channels = channelsForBand(band);
+    var previous = Number(select.value);
+    select.innerHTML = '';
+    channels.forEach(function(ch) {
+      var opt = document.createElement('option');
+      opt.value = String(ch);
+      opt.textContent = t('setup_wizard.network_channel', d('Ch {channel}', 'Canal {channel}')).replace('{channel}', ch);
+      select.appendChild(opt);
+    });
+    var target = (select.dataset.userEdited && channels.indexOf(previous) >= 0) ? previous : defaultChannelForBand(band);
+    select.value = String(target);
+    var help = document.getElementById('wizard-ap-channel-help');
+    if (help) {
+      help.textContent = band === '5'
+        ? t('setup_wizard.ap_channel_help_5', d('5 GHz channels (36-165).', 'Canales de 5 GHz (36-165).'))
+        : t('setup_wizard.ap_channel_help_24', d('2.4 GHz channels (1-13).', 'Canales de 2.4 GHz (1-13).'));
+    }
+  }
+
+  function getSelectedApChannel() {
+    var band = setupInfo.band === '5' ? '5' : '2.4';
+    var select = document.getElementById('wizard-ap-channel');
+    var ch = select ? Number(select.value) : NaN;
+    if (channelsForBand(band).indexOf(ch) >= 0) return ch;
+    return defaultChannelForBand(band);
   }
 
   // updateHostapdBandUI ajusta el campo SSID y la ayuda del paso 3 según la banda elegida:
@@ -257,6 +331,7 @@
     if (step === 4) {
       updateHostapdBandUI();
       updateApChannelNote();
+      fillApChannelOptions();
     }
   }
 
@@ -267,8 +342,8 @@
     document.querySelectorAll('.step-dot').forEach(function(el) {
       const stepNum = parseInt(el.getAttribute('data-step'), 10);
       if (isCable) {
-        // Cable: solo pasos 1, 4, 5 visibles
-        if (stepNum === 2 || stepNum === 3) {
+        // Cable: pasos 1, 2 (banda del AP), 4 y 5 visibles; se omite el paso 3 (conectar WiFi).
+        if (stepNum === 3) {
           el.classList.add('d-none');
           el.nextElementSibling && el.nextElementSibling.classList.contains('step-line') && el.nextElementSibling.classList.add('d-none');
         } else {
@@ -694,7 +769,7 @@
         } else {
           showConnectResult(data);
         }
-        setStep(3);
+        setStep(4);
       } else {
         // El cuerpo ya se leyó en `data`; usamos su error (no se puede volver a leer resp.json()).
         var errMsg = (data && data.error) ? String(data.error) : t('setup_wizard.error_connect', d('Error connecting', 'Error al conectar'));
@@ -750,7 +825,7 @@
                 var s = await r.json().catch(function() { return {}; });
                 if (s && s.connection_type === 'ethernet') {
                   showAlert('success', t('setup_wizard.connected', d('Connected', 'Conectado')));
-                  setStep(3);
+                  setStep(4);
                   return;
                 }
                 // WiFi: algunos firmwares/devices devuelven comillas o cambian el formato del SSID.
@@ -759,13 +834,13 @@
                 // igualmente avanzamos para que el wizard no se quede atascado.
                 if (s && s.connection_type === 'wifi' && (s.connected === true || s.connected === undefined)) {
                   showAlert('success', t('setup_wizard.connected', d('Connected', 'Conectado')));
-                  setStep(3);
+                  setStep(4);
                   return;
                 }
                 if (selectedSSID && s && normSSID(s.ssid) && normSSID(selectedSSID) === normSSID(s.ssid)) {
                   if (s.connected === true || s.connection_type === 'wifi') {
                     showAlert('success', t('setup_wizard.connected', d('Connected', 'Conectado')));
-                    setStep(3);
+                    setStep(4);
                     return;
                   }
                 }
@@ -787,6 +862,20 @@
         if (btnText) btnText.textContent = t('setup_wizard.connect_continue', d('Check and continue', 'Comprobar y continuar'));
       }
     }
+  }
+
+  // saveBandPreference guarda la banda elegida sin escanear ni tocar el AP en caliente. Se usa en
+  // la ruta por cable, donde la banda solo define la red que emitirá el HostBerry.
+  async function saveBandPreference(band) {
+    try {
+      var resp = await apiRequest('/api/v1/wifi/setup-band', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ band: band })
+      });
+      var data = resp ? await resp.json().catch(function() { return {}; }) : {};
+      if (data && data.channel && Number(data.channel) > 0) setupInfo.defaultApChannel = Number(data.channel);
+    } catch (e) {}
   }
 
   async function saveHostapd() {
@@ -823,10 +912,11 @@
       var btnText = saveBtn.querySelector('.btn-text');
       if (btnText) btnText.textContent = t('common.saving', d('Saving...', 'Guardando...'));
     }
-    const ch24 = 6;
-    const ch5 = setupInfo.connectedChannel && setupInfo.band === '5'
-      ? setupInfo.connectedChannel
-      : (setupInfo.defaultApChannel && setupInfo.band === '5' ? setupInfo.defaultApChannel : 36);
+    // El canal elegido corresponde a la banda seleccionada (1-13 en 2.4 GHz, 36-165 en 5 GHz);
+    // el perfil de la otra banda conserva su canal por defecto.
+    const selectedChannel = getSelectedApChannel();
+    const ch24 = band === '2.4' ? selectedChannel : 6;
+    const ch5 = band === '5' ? selectedChannel : 36;
     const payload = {
       interface: setupInfo.interface || 'wlan0',
       ssid_24: ssid24,
@@ -939,6 +1029,7 @@
         if (card.classList.contains('disabled')) return;
         selectedConnectionType = card.getAttribute('data-connection');
         updateConnectionCardSelection(selectedConnectionType);
+        updateBandStepTexts();
         var nextBtn = document.getElementById('wizard-connection-next');
         if (nextBtn) nextBtn.disabled = false;
       });
@@ -951,11 +1042,9 @@
     // Paso 1 — "Siguiente": según el tipo de conexión, va al paso correspondiente.
     var connectionNext = document.getElementById('wizard-connection-next');
     if (connectionNext) connectionNext.addEventListener('click', function() {
-      if (selectedConnectionType === 'cable') {
-        // Cable: saltar directamente a configuración de hostapd (paso 4)
-        setStep(4);
-      } else if (selectedConnectionType === 'wifi') {
-        // WiFi: ir a selección de banda (paso 2)
+      // Ambas rutas eligen primero la banda (paso 2): por WiFi determina en qué frecuencia se
+      // buscan las redes; por cable, la banda en la que emitirá el AP HostBerry.
+      if (selectedConnectionType === 'cable' || selectedConnectionType === 'wifi') {
         setStep(2);
       }
     });
@@ -979,6 +1068,16 @@
     var bandNext = document.getElementById('wizard-band-next');
     if (bandNext) bandNext.addEventListener('click', function() {
       var band = selectedBand || (setupInfo.band === '5' ? '5' : '2.4');
+      if (selectedConnectionType === 'cable') {
+        // Cable: no hay que escanear redes; se guarda la banda del AP y se configura hostapd.
+        setupInfo.band = band;
+        setStep(4);
+        saveBandPreference(band).then(function() {
+          updateApChannelNote();
+          fillApChannelOptions();
+        });
+        return;
+      }
       setupInfo.scanBand = band;
       setStep(3);
       applyBand(band);
@@ -1005,15 +1104,17 @@
         })();
       });
     }
+    var back2 = document.getElementById('wizard-back-2');
+    if (back2) back2.addEventListener('click', function() { setStep(1); });
     var back3 = document.getElementById('wizard-back-3');
     var back4 = document.getElementById('wizard-back-4');
     var next4 = document.getElementById('wizard-next-4');
     var back5 = document.getElementById('wizard-back-5');
     if (back3) back3.addEventListener('click', function() { setStep(2); });
-    if (back4) back4.addEventListener('click', function() { 
-      // Si es cable, volver al paso 1. Si es WiFi, volver al paso 3.
+    if (back4) back4.addEventListener('click', function() {
+      // Si es cable, volver a la elección de banda. Si es WiFi, volver a la conexión WiFi.
       if (selectedConnectionType === 'cable') {
-        setStep(1);
+        setStep(2);
       } else {
         setStep(3);
       }
@@ -1046,6 +1147,10 @@
     // Si el usuario edita el SSID, no lo sobrescribimos con el valor por defecto de la banda.
     var apSsidInput = document.getElementById('wizard-ap-ssid');
     if (apSsidInput) apSsidInput.addEventListener('input', function() { apSsidInput.dataset.userEdited = '1'; });
+
+    // Si el usuario elige un canal, no lo sobrescribimos con el valor por defecto de la banda.
+    var apChannelSelect = document.getElementById('wizard-ap-channel');
+    if (apChannelSelect) apChannelSelect.addEventListener('change', function() { apChannelSelect.dataset.userEdited = '1'; });
 
     var params = new URLSearchParams(window.location.search || '');
     var stepParam = params.get('step');

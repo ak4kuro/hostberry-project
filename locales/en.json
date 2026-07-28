@@ -2573,7 +2573,13 @@
     "security_vpn": "VPN",
     "security_vpn_desc": "Classic VPN connection.",
     "security_wireguard": "WireGuard",
-    "security_wireguard_desc": "Modern, fast VPN."
+    "security_wireguard_desc": "Modern, fast VPN.",
+    "step_band_title_ap": "Choose the HostBerry network band",
+    "step_band_desc_ap": "Select the band your HostBerry will broadcast on (2.4 GHz or 5 GHz).",
+    "band_select_help_ap": "The chosen band applies to the HostBerry access point after the device reboots at the end of the wizard.",
+    "ap_channel_label": "Access point channel",
+    "ap_channel_help_24": "2.4 GHz channels (1-13).",
+    "ap_channel_help_5": "5 GHz channels (36-165)."
   },
   "blocky": {
     "active": "Active",
