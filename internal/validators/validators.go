@@ -99,6 +99,14 @@ func ValidateSSID(ssid string) error {
 	if len(ssid) > 32 {
 		return fiber.NewError(400, "El SSID no puede tener más de 32 caracteres")
 	}
+	// El SSID se escribe en ficheros de configuración (wpa_supplicant.conf,
+	// hostapd.conf) y en comandos de shell: rechazar caracteres de control,
+	// comillas y barra invertida evita inyección de directivas/comandos.
+	for _, r := range ssid {
+		if r < 0x20 || r == 0x7F || r == '"' || r == '\\' {
+			return fiber.NewError(400, "El SSID contiene caracteres no permitidos")
+		}
+	}
 	return nil
 }
 

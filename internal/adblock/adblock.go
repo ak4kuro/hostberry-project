@@ -269,10 +269,12 @@ func configureDNSCrypt(serverName string, blockAds bool, user string) map[string
 		"cloudflare":       "sdns://AgcAAAAAAAAABzEuMC4wLjEAEmRucy5jbG91ZGZsYXJlLmNvbQovZG5zLXF1ZXJ5",
 	}
 
-	serverSDNS := servers["adguard-dns"] // Por defecto AdGuard que filtra publicidad
-	if serverName != "" && servers[serverName] != "" {
-		serverSDNS = servers[serverName]
+	// Solo se aceptan los servidores conocidos: el nombre se incrusta en el
+	// TOML y un valor arbitrario permitiría inyectar directivas.
+	if _, ok := servers[serverName]; !ok {
+		serverName = "adguard-dns"
 	}
+	serverSDNS := servers[serverName]
 
 	// Configuración básica de dnscrypt-proxy.toml
 	configContent := fmt.Sprintf(`# Configuración DNSCrypt para HostBerry
@@ -849,20 +851,41 @@ func configureBlocky(upstreams []string, blockLists []string, user string) map[s
 		}
 	}
 
-	// Generar config.yml
+	// Generar config.yml. Rechazar valores con caracteres de control: un '\n'
+	// permitiría inyectar claves arbitrarias en el YAML de Blocky.
+	yamlSafe := func(s string) bool {
+		for _, r := range s {
+			if r < 0x20 || r == 0x7F {
+				return false
+			}
+		}
+		return true
+	}
 	var upLines []string
 	for _, u := range upstreams {
 		u = strings.TrimSpace(u)
-		if u != "" {
-			upLines = append(upLines, "    - "+u)
+		if u == "" {
+			continue
 		}
+		if !yamlSafe(u) {
+			result["success"] = false
+			result["error"] = "Upstream DNS contiene caracteres no permitidos"
+			return result
+		}
+		upLines = append(upLines, "    - "+u)
 	}
 	var listLines []string
 	for _, l := range blockLists {
 		l = strings.TrimSpace(l)
-		if l != "" {
-			listLines = append(listLines, "  - "+l)
+		if l == "" {
+			continue
 		}
+		if !yamlSafe(l) {
+			result["success"] = false
+			result["error"] = "URL de lista de bloqueo contiene caracteres no permitidos"
+			return result
+		}
+		listLines = append(listLines, "  - "+l)
 	}
 
 	configContent := `# Blocky - Configuración generada por HostBerry

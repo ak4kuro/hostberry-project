@@ -168,13 +168,22 @@ func renderHostapdConfig(iface string, profile DualBandAPProfile, band string, m
 	if len(country) != 2 {
 		country = "ES"
 	}
+	for _, r := range country {
+		if r < 'A' || r > 'Z' {
+			country = "ES"
+			break
+		}
+	}
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "interface=%s\n", iface)
 	b.WriteString("driver=nl80211\n")
 	b.WriteString("ctrl_interface=/run/hostapd\n")
 	b.WriteString("ctrl_interface_group=0\n")
-	fmt.Fprintf(&b, "ssid=%s\n", profile.SSID)
+	// hostapd.conf no admite escapes: eliminar caracteres de control y comillas
+	// del SSID/contraseña para no inyectar directivas (config validada al entrar,
+	// esto cubre valores antiguos ya persistidos).
+	fmt.Fprintf(&b, "ssid=%s\n", sanitizeHostapdValue(profile.SSID))
 	fmt.Fprintf(&b, "hw_mode=%s\n", mode)
 	fmt.Fprintf(&b, "channel=%d\n", ch)
 	fmt.Fprintf(&b, "country_code=%s\n", country)
@@ -194,14 +203,14 @@ func renderHostapdConfig(iface string, profile DualBandAPProfile, band string, m
 	case "wpa2":
 		b.WriteString("auth_algs=1\n")
 		b.WriteString("wpa=2\n")
-		fmt.Fprintf(&b, "wpa_passphrase=%s\n", profile.Password)
+		fmt.Fprintf(&b, "wpa_passphrase=%s\n", sanitizeHostapdValue(profile.Password))
 		b.WriteString("wpa_key_mgmt=WPA-PSK\n")
 		b.WriteString("wpa_pairwise=CCMP\n")
 		b.WriteString("rsn_pairwise=CCMP\n")
 	case "wpa3":
 		b.WriteString("auth_algs=1\n")
 		b.WriteString("wpa=2\n")
-		fmt.Fprintf(&b, "wpa_passphrase=%s\n", profile.Password)
+		fmt.Fprintf(&b, "wpa_passphrase=%s\n", sanitizeHostapdValue(profile.Password))
 		b.WriteString("wpa_key_mgmt=WPA-PSK-SHA256\n")
 		b.WriteString("wpa_pairwise=CCMP\n")
 		b.WriteString("rsn_pairwise=CCMP\n")

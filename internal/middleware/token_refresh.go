@@ -27,7 +27,9 @@ func RefreshSessionCookieMiddleware(c *fiber.Ctx) error {
 	if token == "" {
 		return nil
 	}
-	claims, err := auth.ValidateToken(token)
+	// Solo se refresca cuando la ruta ya autenticó al usuario (GetUser != nil),
+	// por lo que basta verificar firma/expiración sin repetir la query a BD.
+	claims, err := auth.ParseTokenClaims(token)
 	if err != nil || claims.ExpiresAt == nil {
 		return nil
 	}

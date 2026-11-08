@@ -2491,6 +2491,7 @@
     "finish": "Ir al panel",
     "continue": "Continuar",
     "completed_redirect": "Configuración inicial completada. Continúa para asegurar tu cuenta.",
+    "invalid_params_reset": "La configuración del asistente no es válida. Se han restaurado los valores de fábrica; completa el asistente de nuevo.",
     "release_ap_limit_failed": "La configuración se guardó pero no se pudo permitir más clientes en el punto de acceso. Revisa hostapd y dnsmasq.",
     "skip_step": "Omitir",
     "back": "Atrás",

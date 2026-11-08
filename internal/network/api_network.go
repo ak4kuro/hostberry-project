@@ -576,20 +576,18 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 
 	dnsServers := []string{}
 	if req.DNS1 != "" {
-		ipRegex := regexp.MustCompile(`^([0-9]{1,3}\.){3}[0-9]{1,3}$`)
-		if !ipRegex.MatchString(req.DNS1) {
+		if err := validators.ValidateIP(strings.TrimSpace(req.DNS1)); err != nil {
 			errors = append(errors, "Invalid DNS1 format")
 		} else {
-			dnsServers = append(dnsServers, req.DNS1)
+			dnsServers = append(dnsServers, strings.TrimSpace(req.DNS1))
 		}
 	}
 
 	if req.DNS2 != "" {
-		ipRegex := regexp.MustCompile(`^([0-9]{1,3}\.){3}[0-9]{1,3}$`)
-		if !ipRegex.MatchString(req.DNS2) {
+		if err := validators.ValidateIP(strings.TrimSpace(req.DNS2)); err != nil {
 			errors = append(errors, "Invalid DNS2 format")
 		} else {
-			dnsServers = append(dnsServers, req.DNS2)
+			dnsServers = append(dnsServers, strings.TrimSpace(req.DNS2))
 		}
 	}
 
@@ -689,10 +687,10 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 	}
 
 	if req.Gateway != "" {
-		ipRegex := regexp.MustCompile(`^([0-9]{1,3}\.){3}[0-9]{1,3}$`)
-		if !ipRegex.MatchString(req.Gateway) {
+		if err := validators.ValidateIP(strings.TrimSpace(req.Gateway)); err != nil {
 			errors = append(errors, "Invalid Gateway format")
 		} else {
+			req.Gateway = strings.TrimSpace(req.Gateway)
 			gatewayApplied := false
 
 			if !gatewayApplied {

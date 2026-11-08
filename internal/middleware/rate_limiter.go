@@ -17,7 +17,10 @@ type RateLimiter struct {
 	window   time.Duration
 }
 
-var globalRateLimiter *RateLimiter
+var (
+	globalRateLimiter *RateLimiter
+	rateLimiterOnce   sync.Once
+)
 
 func NewRateLimiter(maxReqs int, window time.Duration) *RateLimiter {
 	rl := &RateLimiter{
@@ -36,6 +39,12 @@ func (rl *RateLimiter) Allow(key string) bool {
 }
 
 func (rl *RateLimiter) AllowWithRetry(key string) (bool, time.Duration) {
+	// maxReqs <= 0 desactiva el límite (evita bloquear toda la API si la
+	// configuración trae un valor inválido).
+	if rl.maxReqs <= 0 {
+		return true, 0
+	}
+
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
@@ -91,12 +100,12 @@ func (rl *RateLimiter) cleanup() {
 
 // RateLimitMiddleware limita peticiones por IP (y, si existe `user_id`, también por usuario).
 func RateLimitMiddleware(c *fiber.Ctx) error {
-	if globalRateLimiter == nil {
+	rateLimiterOnce.Do(func() {
 		globalRateLimiter = NewRateLimiter(
 			config.AppConfig.Security.RateLimitRPS,
 			time.Second,
 		)
-	}
+	})
 
 	key := c.IP()
 	if userID := c.Locals("user_id"); userID != nil {

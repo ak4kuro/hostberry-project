@@ -2,10 +2,23 @@ package hostapd
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"hostberry/internal/validators"
 )
+
+// sanitizeHostapdConfValue elimina caracteres que romperían la sintaxis de
+// hostapd.conf (saltos de línea, caracteres de control, comillas y '#') al
+// incrustar un valor en una directiva `clave=valor`.
+func sanitizeHostapdConfValue(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7F || r == '"' || r == '\'' || r == '#' {
+			return -1
+		}
+		return r
+	}, s)
+}
 
 // HostapdConfigBody es el cuerpo JSON de configuración HostAPD (POST).
 type HostapdConfigBody struct {

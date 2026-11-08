@@ -23,6 +23,71 @@ const WpaSupplicantCtrlDir = "/opt/hostberry/data/wpa_ctrl"
 // WpaSocketDirs: directorios donde wpa_supplicant puede crear el socket (evita repetir la lista).
 var WpaSocketDirs = []string{WpaSupplicantCtrlDir, "/run/wpa_supplicant", "/var/run/wpa_supplicant", "/tmp/wpa_supplicant"}
 
+// wpaConfEscape escapa un valor para incrustarlo entre comillas dobles en
+// wpa_supplicant.conf. Elimina caracteres de control (saltos de línea, etc.)
+// que romperían la sintaxis del fichero o permitirían inyectar directivas,
+// y escapa '\' y '"' para el parser de wpa_supplicant.
+func wpaConfEscape(s string) string {
+	s = strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7F {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	return strings.ReplaceAll(s, "\"", "\\\"")
+}
+
+// sanitizeCountryCode normaliza un código de país WiFi a ISO alpha-2 mayúsculas.
+// Si no es válido devuelve el país por defecto (evita inyectar líneas en la
+// cabecera `country=` de wpa_supplicant.conf).
+func sanitizeCountryCode(country string) string {
+	country = strings.ToUpper(strings.TrimSpace(country))
+	if len(country) != 2 {
+		return constants.DefaultCountryCode
+	}
+	for _, r := range country {
+		if r < 'A' || r > 'Z' {
+			return constants.DefaultCountryCode
+		}
+	}
+	return country
+}
+
+// sanitizeHostapdValue elimina caracteres que romperían la sintaxis de
+// hostapd.conf (saltos de línea, caracteres de control y comillas) al
+// incrustar un valor en una directiva `clave=valor`.
+func sanitizeHostapdValue(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7F || r == '"' || r == '\'' || r == '#' {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// splitNMCLIField devuelve el primer campo de una línea `nmcli -t` y el resto.
+// nmcli escapa ':' y '\' dentro de los valores (\: y \\), así que el
+// separador real es el primer ':' no precedido por '\'.
+func splitNMCLIField(line string) (field, rest string) {
+	for i := 0; i < len(line); i++ {
+		if line[i] == '\\' && i+1 < len(line) {
+			i++
+			continue
+		}
+		if line[i] == ':' {
+			return line[:i], line[i+1:]
+		}
+	}
+	return line, ""
+}
+
+// unescapeNMCLIField revierte el escape de campos de `nmcli -t` (\: y \\).
+func unescapeNMCLIField(s string) string {
+	s = strings.ReplaceAll(s, `\:`, ":")
+	return strings.ReplaceAll(s, `\\`, `\`)
+}
+
 // shellQuote envuelve un valor para uso seguro en sh -c (evita que $, ;, etc. rompan privileged-exec).
 func shellQuote(s string) string {
 	if s == "" {

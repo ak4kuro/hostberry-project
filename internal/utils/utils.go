@@ -96,23 +96,7 @@ func ExecuteCommandWithTimeout(cmd string, timeout time.Duration) (string, error
 	}
 	cacheMutex.RUnlock()
 
-	allowedCommands := []string{
-		// Nota seguridad: no permitimos shells como "sh" o "bash" desde executeCommand.
-		// La cadena completa se ejecuta internamente con "sh -c"; si permitiéramos "sh -c"
-		// también, se podría escapar del allowlist pasando comandos arbitrarios dentro del -c.
-		"hostname", "hostnamectl", "uname", "cat", "grep", "awk", "sed", "cut", "head", "tail",
-		"top", "free", "df", "nproc", "journalctl",
-		"iwlist", "nmcli", "iw",
-		"ip", "wg", "wg-quick", "systemctl", "pgrep",
-		"reboot", "shutdown", "poweroff",
-		"rfkill", "ifconfig", "iwconfig",
-		"hostapd", "hostapd_cli", "dnsmasq", "iptables", "iptables-save", "netfilter-persistent", "sysctl", "tee", "cp", "mkdir", "echo", "chmod", "chown", "rm",
-		"dhclient", "udhcpc", "wpa_supplicant", "wpa_cli", "pkill", "killall",
-		"apt-get", "apt",
-		"true",
-	}
-
-	if err := validateShellCommandAllowList(cmd, allowedCommands); err != nil {
+	if err := validateShellCommandAllowList(cmd, allowedShellCommands); err != nil {
 		return "", err
 	}
 
@@ -157,6 +141,28 @@ func ExecuteCommandWithTimeout(cmd string, timeout time.Duration) (string, error
 	cacheMutex.Unlock()
 
 	return result, err
+}
+
+// allowedShellCommands es la allowlist de comandos base permitidos en cadenas
+// shell. No se permiten shells ("sh"/"bash"): la cadena completa ya se ejecuta
+// con "sh -c" internamente y permitirlos permitiría escapar del allowlist.
+var allowedShellCommands = []string{
+	"hostname", "hostnamectl", "uname", "cat", "grep", "awk", "sed", "cut", "head", "tail",
+	"top", "free", "df", "nproc", "journalctl",
+	"iwlist", "nmcli", "iw",
+	"ip", "wg", "wg-quick", "systemctl", "pgrep",
+	"reboot", "shutdown", "poweroff",
+	"rfkill", "ifconfig", "iwconfig",
+	"hostapd", "hostapd_cli", "dnsmasq", "iptables", "iptables-save", "netfilter-persistent", "sysctl", "tee", "cp", "mkdir", "echo", "chmod", "chown", "rm",
+	"dhclient", "udhcpc", "wpa_supplicant", "wpa_cli", "pkill", "killall",
+	"apt-get", "apt",
+	"true",
+}
+
+// ValidateShellCommand exporta la validación del allowlist para paquetes que
+// construyen comandos shell propios (p. ej. execPrivilegedOutput en wifi).
+func ValidateShellCommand(cmd string) error {
+	return validateShellCommandAllowList(cmd, allowedShellCommands)
 }
 
 func validateShellCommandAllowList(cmd string, allowedCommands []string) error {
@@ -299,6 +305,14 @@ func shellTokenizeForAllowList(cmd string) []string {
 		}
 
 		if inDouble {
+			// '\"' y '\\' dentro de comillas dobles son escapes: no deben
+			// cerrar/reabrir el estado de comillas.
+			if ch == '\\' && i+1 < len(cmd) {
+				cur.WriteByte(ch)
+				cur.WriteByte(cmd[i+1])
+				i++
+				continue
+			}
 			if ch == '"' {
 				inDouble = false
 				continue
@@ -477,12 +491,17 @@ func clearCommandCache() {
 
 // StrconvAtoiSafe parsea un string como entero positivo (solo dígitos), sin usar strconv.Atoi.
 func StrconvAtoiSafe(s string) (int, error) {
+	const maxInt = int(^uint(0) >> 1)
 	n := 0
 	for _, r := range s {
 		if r < '0' || r > '9' {
 			return 0, fmt.Errorf("invalid int")
 		}
-		n = n*10 + int(r-'0')
+		d := int(r - '0')
+		if n > (maxInt-d)/10 {
+			return 0, fmt.Errorf("int overflow")
+		}
+		n = n*10 + d
 	}
 	return n, nil
 }

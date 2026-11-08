@@ -36,9 +36,14 @@ func SaveWizardPendingWiFi(w WizardPendingWiFi) error {
 	if w.SSID == "" {
 		return fmt.Errorf("SSID requerido")
 	}
-	if strings.TrimSpace(w.Country) == "" {
-		w.Country = constants.DefaultCountryCode
+	// Una red abierta no debe llevar contraseña: si se guardara, al persistir la
+	// config se escribiría como WPA2 y la conexión fallaría tras el reinicio.
+	secUpper := strings.ToUpper(strings.TrimSpace(w.Security))
+	isOpen := secUpper == "" || secUpper == "NONE" || strings.Contains(secUpper, "OPEN")
+	if isOpen {
+		w.Password = ""
 	}
+	w.Country = sanitizeCountryCode(w.Country)
 	if strings.TrimSpace(w.Interface) == "" {
 		w.Interface = constants.DefaultWiFiInterface
 	}
@@ -68,10 +73,8 @@ func GetWizardPendingWiFi() (WizardPendingWiFi, bool) {
 	w.Country, _ = database.GetConfig(wizardPendingCountryKey)
 	w.Security, _ = database.GetConfig(wizardPendingSecurityKey)
 	w.Interface, _ = database.GetConfig(wizardPendingInterfaceKey)
-	if strings.TrimSpace(w.Country) == "" {
-		w.Country = constants.DefaultCountryCode
-	}
-	if strings.TrimSpace(w.Interface) == "" {
+	w.Country = sanitizeCountryCode(w.Country)
+	if w.Interface == "" {
 		w.Interface = constants.DefaultWiFiInterface
 	}
 	return w, true
@@ -102,11 +105,9 @@ func PersistPendingWiFiForReboot() error {
 	if country == "" {
 		country = constants.DefaultCountryCode
 	}
+	country = sanitizeCountryCode(country)
 
-	escape := func(s string) string {
-		s = strings.ReplaceAll(s, "\\", "\\\\")
-		return strings.ReplaceAll(s, "\"", "\\\"")
-	}
+	escape := wpaConfEscape
 
 	secUpper := strings.ToUpper(strings.TrimSpace(w.Security))
 	var networkBlock string
@@ -123,7 +124,7 @@ func PersistPendingWiFiForReboot() error {
 			networkBlock = strings.TrimSpace(string(out))
 		}
 	default:
-		networkBlock = fmt.Sprintf("network={\n\tssid=\"%s\"\n\tkey_mgmt=NONE\n}", strings.ReplaceAll(w.SSID, "\\", "\\\\"))
+		networkBlock = fmt.Sprintf("network={\n\tssid=\"%s\"\n\tkey_mgmt=NONE\n}", escape(w.SSID))
 	}
 
 	configContent := fmt.Sprintf("ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev\nupdate_config=1\ncountry=%s\n\n%s", country, networkBlock)

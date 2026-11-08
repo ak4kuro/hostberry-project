@@ -19,7 +19,10 @@ func WifiLegacyStoredNetworksHandler(c *fiber.Ctx) error {
 	var networks []fiber.Map
 	var lastConnected []string
 
-	interfaceName := "wlan0"
+	interfaceName := DetectWiFiInterface()
+	if err := validateInterfaceName(interfaceName); err != nil {
+		interfaceName = constants.DefaultWiFiInterface
+	}
 
 	listOut, err := exec.Command("sudo", "wpa_cli", "-i", interfaceName, "list_networks").CombinedOutput()
 	if err != nil {
@@ -127,15 +130,16 @@ func WifiLegacyDisconnectHandler(c *fiber.Ctx) error {
 	if err == nil && len(activeConnOut) > 0 {
 		lines := strings.Split(strings.TrimSpace(string(activeConnOut)), "\n")
 		if len(lines) > 0 {
-			parts := strings.Split(lines[0], ":")
-			if len(parts) > 0 {
-				connectionName = strings.TrimSpace(parts[0])
+			// nmcli -t escapa ':' y '\' dentro de los campos; buscar el primer
+			// separador no escapado para no truncar nombres con ':' dentro.
+			if name, _ := splitNMCLIField(lines[0]); name != "" {
+				connectionName = unescapeNMCLIField(name)
 			}
 		}
 	}
 
 	if connectionName != "" {
-		disconnectCmd := execCommand(fmt.Sprintf("nmcli connection down '%s'", connectionName))
+		disconnectCmd := execCommand(fmt.Sprintf("nmcli connection down %s", shellQuote(connectionName)))
 		disconnectOut, disconnectErr := disconnectCmd.CombinedOutput()
 
 		if disconnectErr == nil {
@@ -153,8 +157,8 @@ func WifiLegacyDisconnectHandler(c *fiber.Ctx) error {
 
 	if err == nil && len(wifiDeviceOut) > 0 {
 		deviceName := strings.TrimSpace(string(wifiDeviceOut))
-		if deviceName != "" {
-			deviceDisconnectCmd := execCommand(fmt.Sprintf("nmcli device disconnect '%s'", deviceName))
+		if deviceName != "" && validateInterfaceName(deviceName) == nil {
+			deviceDisconnectCmd := execCommand(fmt.Sprintf("nmcli device disconnect %s", shellQuote(deviceName)))
 			deviceDisconnectOut, deviceDisconnectErr := deviceDisconnectCmd.CombinedOutput()
 
 			if deviceDisconnectErr == nil {

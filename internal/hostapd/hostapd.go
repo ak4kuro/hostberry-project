@@ -1254,7 +1254,7 @@ channel=%d
 country_code=%s
 ieee80211d=1
 ieee80211n=1
-`, apInterface, req.SSID, hwModeForChannel(req.Channel), req.Channel, req.Country)
+`, apInterface, sanitizeHostapdConfValue(req.SSID), hwModeForChannel(req.Channel), req.Channel, req.Country)
 	if req.Channel > 14 {
 		configContent += "ieee80211ac=1\n"
 	}
@@ -1267,14 +1267,14 @@ wpa_passphrase=%s
 wpa_key_mgmt=WPA-PSK
 wpa_pairwise=TKIP
 rsn_pairwise=CCMP
-`, req.Password)
+`, sanitizeHostapdConfValue(req.Password))
 	} else if req.Security == "wpa3" {
 		configContent += fmt.Sprintf(`wpa=2
 wpa_passphrase=%s
 wpa_key_mgmt=WPA-PSK-SHA256
 wpa_pairwise=CCMP
 rsn_pairwise=CCMP
-`, req.Password)
+`, sanitizeHostapdConfValue(req.Password))
 	}
 
 	if auth.IsInitialSetupPending() {

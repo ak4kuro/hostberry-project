@@ -166,6 +166,9 @@ func ChangePasswordAPIHandler(c *fiber.Ctx) error {
 	if !CheckPassword(req.CurrentPassword, user.Password) {
 		return c.Status(401).JSON(fiber.Map{"error": i18n.T(c, "auth.incorrect_current_password", "Current password is incorrect")})
 	}
+	if err := validators.ValidatePassword(req.NewPassword); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": i18n.T(c, "auth.weak_password", "La contraseña no cumple los requisitos mínimos")})
+	}
 
 	hashed, err := HashPassword(req.NewPassword)
 	if err != nil {
@@ -330,6 +333,12 @@ func UpdateProfileAPIHandler(c *fiber.Ctx) error {
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Datos inválidos"})
+	}
+
+	if req.Email != "" {
+		if err := validators.ValidateEmail(req.Email); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Email inválido"})
+		}
 	}
 
 	user.Email = req.Email

@@ -26,9 +26,13 @@ func SystemLogsHandler(c *fiber.Ctx) error {
 	offsetStr := c.Query("offset", "0")
 
 	switch level {
-	case "all", "INFO", "WARNING", "ERROR", "DEBUG":
+	case "all", "INFO", "WARN", "WARNING", "ERROR", "DEBUG":
 	default:
 		level = "all"
+	}
+	// Los logs se escriben con "WARN"; "WARNING" es un alias del filtro.
+	if level == "WARNING" {
+		level = "WARN"
 	}
 
 	limit, _ := strconv.Atoi(limitStr)

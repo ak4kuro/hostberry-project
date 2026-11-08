@@ -49,6 +49,11 @@ func execPrivilegedOutputTimeout(cmd string, timeout time.Duration) (string, err
 	if cmd == "" {
 		return "", fmt.Errorf("comando vacío")
 	}
+	// Este camino no pasa por ExecuteCommandWithTimeout: validar igualmente el
+	// allowlist para que un comando mal construido no llegue a privileged-exec.
+	if err := utils.ValidateShellCommand(cmd); err != nil {
+		return "", fmt.Errorf("comando no permitido: %v", err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -695,6 +700,7 @@ func VerifyWiFiPassword(ssid, password, interfaceName, country string) map[strin
 	result["success"] = false
 	result["error"] = ""
 	result["auth_failed"] = false
+	country = sanitizeCountryCode(country)
 
 	if ssid == "" {
 		result["error"] = "SSID requerido"
@@ -739,10 +745,7 @@ func VerifyWiFiPassword(ssid, password, interfaceName, country string) map[strin
 		securityType = detectSSIDSecurityFromWpaCli(interfaceName, ssid)
 	}
 
-	escape := func(s string) string {
-		s = strings.ReplaceAll(s, "\\", "\\\\")
-		return strings.ReplaceAll(s, "\"", "\\\"")
-	}
+	escape := wpaConfEscape
 
 	if password != "" && strings.EqualFold(securityType, "WPA3") {
 		networkBlock = fmt.Sprintf("network={\n\tssid=\"%s\"\n\tkey_mgmt=SAE\n\tsae_password=\"%s\"\n}", escape(ssid), escape(password))
@@ -756,7 +759,7 @@ func VerifyWiFiPassword(ssid, password, interfaceName, country string) map[strin
 		}
 		networkBlock = strings.TrimSpace(string(out))
 	} else {
-		networkBlock = fmt.Sprintf("network={\n\tssid=\"%s\"\n\tkey_mgmt=NONE\n}", strings.ReplaceAll(ssid, "\\", "\\\\"))
+		networkBlock = fmt.Sprintf("network={\n\tssid=\"%s\"\n\tkey_mgmt=NONE\n}", escape(ssid))
 	}
 
 	// Crear config temporal para verificación
@@ -898,6 +901,7 @@ func ConnectWiFi(ssid, password, interfaceName, country, user string) map[string
 	result := make(map[string]interface{})
 	result["success"] = false
 	result["error"] = ""
+	country = sanitizeCountryCode(country)
 	if ssid == "" {
 		result["error"] = "SSID requerido"
 		return result
@@ -928,10 +932,7 @@ func ConnectWiFi(ssid, password, interfaceName, country, user string) map[string
 		securityType = detectSSIDSecurityFromWpaCli(interfaceName, ssid)
 	}
 
-	escape := func(s string) string {
-		s = strings.ReplaceAll(s, "\\", "\\\\")
-		return strings.ReplaceAll(s, "\"", "\\\"")
-	}
+	escape := wpaConfEscape
 
 	if password != "" && strings.EqualFold(securityType, "WPA3") {
 		// WPA3 Personal (SAE)
@@ -947,7 +948,7 @@ func ConnectWiFi(ssid, password, interfaceName, country, user string) map[string
 		}
 		networkBlock = strings.TrimSpace(string(out))
 	} else {
-		networkBlock = fmt.Sprintf("network={\n\tssid=\"%s\"\n\tkey_mgmt=NONE\n}", strings.ReplaceAll(ssid, "\\", "\\\\"))
+		networkBlock = fmt.Sprintf("network={\n\tssid=\"%s\"\n\tkey_mgmt=NONE\n}", escape(ssid))
 	}
 
 	runDir := WpaSupplicantCtrlDir

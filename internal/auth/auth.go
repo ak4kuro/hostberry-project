@@ -86,6 +86,26 @@ func ValidateToken(tokenString string) (*models.Claims, error) {
 	return claims, nil
 }
 
+// ParseTokenClaims verifica firma HMAC y validez del JWT sin consultar la base
+// de datos. Solo debe usarse cuando la petición ya pasó por autenticación
+// completa (p. ej. RefreshSessionCookieMiddleware tras RequireAuth).
+func ParseTokenClaims(tokenString string) (*models.Claims, error) {
+	if tokenString == "" {
+		return nil, errors.New("token vacío")
+	}
+	claims := &models.Claims{}
+	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("método de firma inválido")
+		}
+		return []byte(config.AppConfig.Security.JWTSecret), nil
+	})
+	if err != nil || !token.Valid {
+		return nil, errors.New("token inválido")
+	}
+	return claims, nil
+}
+
 // HashPassword hashea una contraseña con bcrypt.
 func HashPassword(password string) (string, error) {
 	bytes, err := bcrypt.GenerateFromPassword([]byte(password), config.AppConfig.Security.BcryptCost)

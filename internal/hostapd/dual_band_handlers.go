@@ -7,6 +7,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"hostberry/internal/auth"
 	"hostberry/internal/constants"
+	"hostberry/internal/validators"
 	"hostberry/internal/wifi"
 )
 
@@ -45,11 +46,14 @@ func HostapdDualBandConfigHandler(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "error": "Invalid request body"})
 	}
-	log.Printf("[WIZARD-DEBUG] dual-band payload: ssid_24=%q ssid_5=%q ch24=%d ch5=%d security=%q pwd_len=%d iface=%q rawbody=%q", req.SSID24, req.SSID5, req.Channel24, req.Channel5, req.Security, len(req.Password), req.Interface, string(c.Body()))
+	log.Printf("[WIZARD-DEBUG] dual-band payload: ssid_24=%q ssid_5=%q ch24=%d ch5=%d security=%q pwd_len=%d iface=%q", req.SSID24, req.SSID5, req.Channel24, req.Channel5, req.Security, len(req.Password), req.Interface)
 
 	country := strings.ToUpper(strings.TrimSpace(req.Country))
-	if len(country) != 2 {
+	if country == "" {
 		country = constants.DefaultCountryCode
+	}
+	if err := validators.ValidateCountryCode(country); err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "error": "Código de país inválido"})
 	}
 	security := strings.TrimSpace(req.Security)
 	if security == "" {
@@ -67,6 +71,25 @@ func HostapdDualBandConfigHandler(c *fiber.Ctx) error {
 				"success": false,
 				"error":   "La contraseña del punto de acceso debe tener entre 8 y 63 caracteres (estándar WiFi WPA2/WPA3).",
 			})
+		}
+		for _, r := range req.Password {
+			if r < 0x20 || r == 0x7F {
+				return c.Status(400).JSON(fiber.Map{
+					"success": false,
+					"error":   "La contraseña del punto de acceso contiene caracteres no permitidos.",
+				})
+			}
+		}
+	}
+
+	if s := strings.TrimSpace(req.SSID24); s != "" {
+		if err := validators.ValidateSSID(s); err != nil {
+			return c.Status(400).JSON(fiber.Map{"success": false, "error": "SSID 2.4 GHz inválido"})
+		}
+	}
+	if s := strings.TrimSpace(req.SSID5); s != "" {
+		if err := validators.ValidateSSID(s); err != nil {
+			return c.Status(400).JSON(fiber.Map{"success": false, "error": "SSID 5 GHz inválido"})
 		}
 	}
 

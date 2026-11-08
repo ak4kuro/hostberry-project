@@ -33,7 +33,7 @@ func WifiConnectHandler(c *fiber.Ctx) error {
 			"error": "Datos inválidos",
 		})
 	}
-	log.Printf("[WIZARD-DEBUG] wifi/connect payload: ssid=%q security=%q pwd_len=%d band=%q iface=%q rawbody=%q", req.SSID, req.Security, len(req.Password), req.Band, req.Interface, string(c.Body()))
+	log.Printf("[WIZARD-DEBUG] wifi/connect payload: ssid=%q security=%q pwd_len=%d band=%q iface=%q", req.SSID, req.Security, len(req.Password), req.Band, req.Interface)
 
 	if err := validators.ValidateSSID(req.SSID); err != nil {
 		return err
@@ -73,12 +73,17 @@ func WifiConnectHandler(c *fiber.Ctx) error {
 		userID = &id
 	}
 
-	country := req.Country
+	country := strings.ToUpper(strings.TrimSpace(req.Country))
 	if country == "" {
 		country = c.Query("country", constants.DefaultCountryCode)
 	}
 	if country == "" {
 		country = constants.DefaultCountryCode
+	}
+	if err := validators.ValidateCountryCode(country); err != nil {
+		return c.Status(400).JSON(fiber.Map{
+			"error": "Código de país inválido",
+		})
 	}
 
 	interfaceName := req.Interface

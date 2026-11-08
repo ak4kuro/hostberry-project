@@ -52,18 +52,42 @@ func isSameOriginForCookieAuth(c *fiber.Ctx) bool {
 		return false
 	}
 
-	if origin != "" {
-		if u, err := url.Parse(origin); err != nil || !strings.EqualFold(u.Hostname(), host) {
+	// Puerto efectivo de la petición: el de la cabecera Host si existe; si no,
+	// el puerto por defecto del esquema (los navegadores siempre incluyen el
+	// puerto en Host/Origin cuando no es el estándar).
+	reqPort := "80"
+	if security.IsHTTPSRequest(c) {
+		reqPort = "443"
+	}
+	if hostHeader := strings.TrimSpace(c.Get(fiber.HeaderHost)); hostHeader != "" {
+		if _, port, err := net.SplitHostPort(hostHeader); err == nil && port != "" {
+			reqPort = port
+		}
+	}
+
+	// sameOriginURL valida esquema-host-puerto de una URL de Origin/Referer.
+	sameOriginURL := func(raw string) bool {
+		u, err := url.Parse(raw)
+		if err != nil || !strings.EqualFold(u.Hostname(), host) {
 			return false
 		}
-		return true
+		uPort := u.Port()
+		if uPort == "" {
+			if strings.EqualFold(u.Scheme, "https") {
+				uPort = "443"
+			} else {
+				uPort = "80"
+			}
+		}
+		return uPort == reqPort
+	}
+
+	if origin != "" {
+		return sameOriginURL(origin)
 	}
 
 	if referer != "" {
-		if u, err := url.Parse(referer); err != nil || !strings.EqualFold(u.Hostname(), host) {
-			return false
-		}
-		return true
+		return sameOriginURL(referer)
 	}
 
 	return true

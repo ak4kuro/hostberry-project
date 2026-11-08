@@ -17,7 +17,8 @@ var ValidRoles = map[string]struct{}{
 func NormalizeRole(role string) (string, bool) {
 	role = strings.ToLower(strings.TrimSpace(role))
 	if role == "" {
-		return RoleAdmin, true
+		// Un rol vacío NO debe ascender a admin: devolver inválido.
+		return "", false
 	}
 	_, ok := ValidRoles[role]
 	return role, ok

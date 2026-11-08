@@ -2491,6 +2491,7 @@
     "finish": "Go to dashboard",
     "continue": "Continue",
     "completed_redirect": "Initial setup complete. Continue to secure your account.",
+    "invalid_params_reset": "The setup configuration is not valid. Factory defaults have been restored; please complete the setup wizard again.",
     "release_ap_limit_failed": "Setup saved but the access point could not allow more clients. Check hostapd and dnsmasq.",
     "skip_step": "Skip",
     "back": "Back",
