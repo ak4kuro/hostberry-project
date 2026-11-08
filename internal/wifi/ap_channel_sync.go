@@ -28,27 +28,27 @@ func switchAPChannelViaCSA(freq int) bool {
 		return false
 	}
 	ch := freqToChannel(freq)
-	var attempts []string
+	var attempts [][]string
 	if is24GHzFrequency(freq) {
-		attempts = []string{
-			fmt.Sprintf("hostapd_cli -i %s chan_switch 5 %d ht", apCSAInterface, freq),
-			fmt.Sprintf("hostapd_cli -i %s chan_switch 5 %d", apCSAInterface, freq),
+		attempts = [][]string{
+			{"hostapd_cli", "-i", apCSAInterface, "chan_switch", "5", fmt.Sprint(freq), "ht"},
+			{"hostapd_cli", "-i", apCSAInterface, "chan_switch", "5", fmt.Sprint(freq)},
 		}
 	} else if is5GHzFrequency(freq) {
-		attempts = []string{
-			fmt.Sprintf("hostapd_cli -i %s chan_switch 5 %d vht", apCSAInterface, freq),
-			fmt.Sprintf("hostapd_cli -i %s chan_switch 5 %d", apCSAInterface, freq),
+		attempts = [][]string{
+			{"hostapd_cli", "-i", apCSAInterface, "chan_switch", "5", fmt.Sprint(freq), "vht"},
+			{"hostapd_cli", "-i", apCSAInterface, "chan_switch", "5", fmt.Sprint(freq)},
 		}
 	} else {
 		return false
 	}
-	for _, cmd := range attempts {
-		out, err := execPrivilegedOutputTimeout(cmd, 6*time.Second)
+	for _, args := range attempts {
+		out, err := execPrivilegedArgvTimeout(args, 6*time.Second)
 		if err == nil && !strings.Contains(strings.ToUpper(out), "FAIL") {
 			log.Printf("HostBerry: AP movido al canal %d (%d MHz) vía CSA sin reiniciar (los clientes mantienen la conexión)", ch, freq)
 			return true
 		}
-		log.Printf("HostBerry: CSA chan_switch no aplicado (%s): err=%v out=%s", cmd, err, strings.TrimSpace(out))
+		log.Printf("HostBerry: CSA chan_switch no aplicado (%v): err=%v out=%s", args, err, strings.TrimSpace(out))
 	}
 	return false
 }
@@ -100,11 +100,11 @@ func alignAPForConnect(freq int) bool {
 		return false
 	}
 	log.Printf("HostBerry: CSA falló; reiniciando hostapd en canal %d (%d MHz) para conectar upstream", ch, freq)
-	if out, err := execPrivilegedOutput("systemctl restart hostapd"); err != nil {
+	if out, err := execPrivilegedArgv("systemctl", "restart", "hostapd"); err != nil {
 		log.Printf("HostBerry: restart hostapd en connect: %v (%s)", err, strings.TrimSpace(out))
 		return false
 	}
-	_, _ = execPrivilegedOutput("systemctl restart dnsmasq")
+	_, _ = execPrivilegedArgv("systemctl", "restart", "dnsmasq")
 	time.Sleep(2500 * time.Millisecond)
 	apFreq := apLinkFrequency()
 	ok := apFreq > 0 && freqToChannel(apFreq) == ch
@@ -146,10 +146,10 @@ func restoreAPAfterConnect(interfaceName string) {
 			log.Printf("HostBerry: restoreAPAfterConnect no pudo escribir canal %d: %v", ch, err)
 		}
 	}
-	if out, err := execPrivilegedOutput("systemctl restart hostapd"); err != nil {
+	if out, err := execPrivilegedArgv("systemctl", "restart", "hostapd"); err != nil {
 		log.Printf("HostBerry: restoreAPAfterConnect restart hostapd: %v (%s)", err, strings.TrimSpace(out))
 	}
-	_, _ = execPrivilegedOutput("systemctl restart dnsmasq")
+	_, _ = execPrivilegedArgv("systemctl", "restart", "dnsmasq")
 }
 
 // StartAPChannelSyncDaemon vigila wlan0 y alinea hostapd al mismo canal en modo AP+STA.
@@ -217,8 +217,8 @@ func EnsureAPChannelAligned(interfaceName string) {
 
 	if !active {
 		log.Printf("HostBerry: iniciando hostapd alineado al canal de %s", interfaceName)
-		_, _ = execPrivilegedOutput("systemctl start hostapd")
-		_, _ = execPrivilegedOutput("systemctl restart dnsmasq")
+		_, _ = execPrivilegedArgv("systemctl", "start", "hostapd")
+		_, _ = execPrivilegedArgv("systemctl", "restart", "dnsmasq")
 		return
 	}
 
@@ -228,12 +228,12 @@ func EnsureAPChannelAligned(interfaceName string) {
 		return
 	}
 	log.Printf("HostBerry: CSA no disponible; reiniciando hostapd tras cambio de canal de %s", interfaceName)
-	_, _ = execPrivilegedOutput("systemctl restart hostapd")
-	_, _ = execPrivilegedOutput("systemctl restart dnsmasq")
+	_, _ = execPrivilegedArgv("systemctl", "restart", "hostapd")
+	_, _ = execPrivilegedArgv("systemctl", "restart", "dnsmasq")
 }
 
 func hostapdServiceActive() bool {
-	out, err := execPrivilegedOutput("systemctl is-active hostapd")
+	out, err := execPrivilegedArgv("systemctl", "is-active", "hostapd")
 	return err == nil && strings.TrimSpace(out) == "active"
 }
 
@@ -242,7 +242,7 @@ func staLinkFrequency(interfaceName string) int {
 	if freq := linkFrequencyFromIwDev(interfaceName); freq > 0 {
 		return freq
 	}
-	linkOut, err := execPrivilegedOutput("iw dev " + interfaceName + " link")
+	linkOut, err := execPrivilegedArgv("iw", "dev", interfaceName, "link")
 	if err != nil || strings.Contains(linkOut, "Not connected") {
 		return staFrequencyFromWpaCli(interfaceName)
 	}

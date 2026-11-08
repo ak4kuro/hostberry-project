@@ -1,7 +1,6 @@
 package wifi
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -35,34 +34,8 @@ func validateInterfaceName(interfaceName string) error {
 }
 
 func runSudoSilently(args ...string) error {
-	_, err := execPrivilegedOutput(strings.Join(args, " "))
+	_, err := execPrivilegedArgvTimeout(args, 10*time.Second)
 	return err
-}
-
-// execPrivilegedOutput ejecuta un comando vía privileged-exec (sin caché; p. ej. escaneos WiFi).
-func execPrivilegedOutput(cmd string) (string, error) {
-	return execPrivilegedOutputTimeout(cmd, 45*time.Second)
-}
-
-func execPrivilegedOutputTimeout(cmd string, timeout time.Duration) (string, error) {
-	cmd = strings.TrimSpace(cmd)
-	if cmd == "" {
-		return "", fmt.Errorf("comando vacío")
-	}
-	// Este camino no pasa por ExecuteCommandWithTimeout: validar igualmente el
-	// allowlist para que un comando mal construido no llegue a privileged-exec.
-	if err := utils.ValidateShellCommand(cmd); err != nil {
-		return "", fmt.Errorf("comando no permitido: %v", err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	base := utils.ExecCommand(cmd)
-	c := exec.CommandContext(ctx, base.Path)
-	c.Args = base.Args
-	c.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-	out, err := c.CombinedOutput()
-	return string(out), err
 }
 
 const (
@@ -72,19 +45,26 @@ const (
 	wpaCliScanBudgetLimited = 10 * time.Second
 )
 
-// runPrivilegedCommand ejecuta vía privileged-exec (sudo directo falla bajo ProtectSystem=strict).
-func runPrivilegedCommand(args ...string) (string, error) {
+// execPrivilegedArgvTimeout ejecuta vía privileged-exec/argv (sin shell ni
+// caché para comandos de escritura; el helper decide el caché para lecturas).
+func execPrivilegedArgvTimeout(args []string, timeout time.Duration) (string, error) {
 	if len(args) == 0 {
 		return "", fmt.Errorf("comando vacío")
 	}
-	return execPrivilegedOutput(strings.Join(args, " "))
+	return utils.ExecuteArgvWithTimeout(args, timeout)
+}
+
+func execPrivilegedArgv(args ...string) (string, error) {
+	return execPrivilegedArgvTimeout(args, 45*time.Second)
+}
+
+// runPrivilegedCommand ejecuta vía privileged-exec (sudo directo falla bajo ProtectSystem=strict).
+func runPrivilegedCommand(args ...string) (string, error) {
+	return execPrivilegedArgv(args...)
 }
 
 func runPrivilegedCommandFast(args ...string) (string, error) {
-	if len(args) == 0 {
-		return "", fmt.Errorf("comando vacío")
-	}
-	return execPrivilegedOutputTimeout(strings.Join(args, " "), wpaCliPrivilegedTimeout)
+	return execPrivilegedArgvTimeout(args, wpaCliPrivilegedTimeout)
 }
 
 // ScanWiFiNetworks escanea redes WiFi con iw y devuelve un mapa con "success", "networks" y "error".
@@ -223,8 +203,8 @@ func ScanWiFiNetworksBand(interfaceName string, refresh bool, bandOverride strin
 }
 
 func prepareWiFiInterfaceForScan(interfaceName string) {
-	_, _ = execPrivilegedOutputTimeout("rfkill unblock wifi 2>/dev/null || true", 2*time.Second)
-	_, _ = execPrivilegedOutputTimeout(fmt.Sprintf("ip link set %s up", interfaceName), 2*time.Second)
+	_, _ = execPrivilegedArgvTimeout([]string{"rfkill", "unblock", "wifi"}, 2*time.Second)
+	_, _ = execPrivilegedArgvTimeout([]string{"ip", "link", "set", interfaceName, "up"}, 2*time.Second)
 }
 
 // StartScanPrefetch lanza, tras un breve margen para que la radio se asiente, un escaneo en
@@ -261,13 +241,13 @@ func isWiFiScanBusy(err error, output string) bool {
 }
 
 func runIwScanFast(interfaceName string) (string, error) {
-	trigOut, trigErr := execPrivilegedOutputTimeout(fmt.Sprintf("iw dev %s scan trigger", interfaceName), iwScanPrivilegedTimeout)
+	trigOut, trigErr := execPrivilegedArgvTimeout([]string{"iw", "dev", interfaceName, "scan", "trigger"}, iwScanPrivilegedTimeout)
 	trigText := strings.ToLower(strings.TrimSpace(trigOut))
 	if trigErr != nil || strings.Contains(trigText, "rejected") || strings.Contains(trigText, "busy") {
 		return "", fmt.Errorf("iw scan trigger no disponible: %v %s", trigErr, strings.TrimSpace(trigOut))
 	}
 	time.Sleep(1500 * time.Millisecond)
-	dumpOut, dumpErr := execPrivilegedOutputTimeout(fmt.Sprintf("iw dev %s scan dump", interfaceName), iwScanPrivilegedTimeout)
+	dumpOut, dumpErr := execPrivilegedArgvTimeout([]string{"iw", "dev", interfaceName, "scan", "dump"}, iwScanPrivilegedTimeout)
 	if dumpErr == nil && strings.TrimSpace(dumpOut) != "" {
 		return dumpOut, nil
 	}
@@ -278,21 +258,20 @@ func runIwScanFast(interfaceName string) (string, error) {
 }
 
 func runIwScan(interfaceName string) (string, error) {
-	scanCmd := fmt.Sprintf("iw dev %s scan", interfaceName)
-	scanOut, err := execPrivilegedOutput(scanCmd)
+	scanOut, err := execPrivilegedArgv("iw", "dev", interfaceName, "scan")
 	if err == nil && strings.TrimSpace(scanOut) != "" {
 		return scanOut, nil
 	}
 	lastErr := err
 
-	if _, trigErr := execPrivilegedOutput(fmt.Sprintf("iw dev %s scan trigger", interfaceName)); trigErr != nil {
+	if _, trigErr := execPrivilegedArgv("iw", "dev", interfaceName, "scan", "trigger"); trigErr != nil {
 		if lastErr == nil {
 			lastErr = trigErr
 		}
 	}
 	time.Sleep(4 * time.Second)
 
-	dumpOut, dumpErr := execPrivilegedOutput(fmt.Sprintf("iw dev %s scan dump", interfaceName))
+	dumpOut, dumpErr := execPrivilegedArgv("iw", "dev", interfaceName, "scan", "dump")
 	if dumpErr == nil && strings.TrimSpace(dumpOut) != "" {
 		return dumpOut, nil
 	}
@@ -724,7 +703,7 @@ func VerifyWiFiPassword(ssid, password, interfaceName, country string) map[strin
 	// Tras verificar restauramos el AP para no dejar caído el portal del asistente.
 	apWasActive := concurrentAPInterfacePresent() && hostapdServiceActive()
 	if apWasActive {
-		_, _ = execPrivilegedOutput("systemctl stop hostapd")
+		_, _ = execPrivilegedArgv("systemctl", "stop", "hostapd")
 		time.Sleep(700 * time.Millisecond)
 	}
 	defer func() {
@@ -781,12 +760,12 @@ func VerifyWiFiPassword(ssid, password, interfaceName, country string) map[strin
 	}
 
 	// Copiar a ubicación con permisos
-	_, err := execPrivilegedOutput(fmt.Sprintf("cp %s %s", tempConfigPath, WpaSupplicantConfigDir+"/"+filepath.Base(tempConfigPath)))
+	_, err := execPrivilegedArgv("cp", tempConfigPath, WpaSupplicantConfigDir+"/"+filepath.Base(tempConfigPath))
 	if err != nil {
 		result["error"] = fmt.Sprintf("Error al copiar config: %v", err)
 		return result
 	}
-	defer execPrivilegedOutput(fmt.Sprintf("rm -f %s/%s", WpaSupplicantConfigDir, filepath.Base(tempConfigPath)))
+	defer execPrivilegedArgv("rm", "-f", WpaSupplicantConfigDir+"/"+filepath.Base(tempConfigPath))
 
 	finalConfigPath := WpaSupplicantConfigDir + "/" + filepath.Base(tempConfigPath)
 

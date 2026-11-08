@@ -10,6 +10,7 @@ import (
 	"hostberry/internal/constants"
 	"hostberry/internal/database"
 	middleware "hostberry/internal/middleware"
+	"hostberry/internal/utils"
 )
 
 func WifiToggleHandler(c *fiber.Ctx) error {
@@ -44,22 +45,21 @@ func WifiToggleHandler(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "error": errorMsg})
 	}
 
-	rfkillOut, rfkillErr = execCommand("rfkill list wifi 2>/dev/null | grep -i 'wifi' | head -1").CombinedOutput()
-	if rfkillErr == nil && strings.Contains(strings.ToLower(string(rfkillOut)), "wifi") {
-		statusOut, _ := execCommand("rfkill list wifi 2>/dev/null | grep -i 'soft blocked'").CombinedOutput()
-		isBlocked = strings.Contains(strings.ToLower(string(statusOut)), "yes")
+	rfkillListOut, rfkillListErr := utils.ExecuteArgv("rfkill", "list", "wifi")
+	if rfkillListErr == nil && strings.Contains(strings.ToLower(rfkillListOut), "wifi") {
+		isBlocked = strings.Contains(strings.ToLower(rfkillListOut), "soft blocked: yes")
 
-		var rfkillCmd string
+		var rfkillArgs []string
 		var wasEnabled bool
 		if isBlocked {
-			rfkillCmd = "rfkill unblock wifi"
+			rfkillArgs = []string{"rfkill", "unblock", "wifi"}
 			wasEnabled = false
 		} else {
-			rfkillCmd = "rfkill block wifi"
+			rfkillArgs = []string{"rfkill", "block", "wifi"}
 			wasEnabled = true
 		}
 
-		_, rfkillToggleErr := execCommand(rfkillCmd + " 2>/dev/null").CombinedOutput()
+		_, rfkillToggleErr := utils.ExecuteArgv(rfkillArgs...)
 		if rfkillToggleErr == nil {
 			if !wasEnabled {
 				time.Sleep(1 * time.Second)
@@ -68,7 +68,7 @@ func WifiToggleHandler(c *fiber.Ctx) error {
 					iface = firstWirelessIface()
 				}
 				if iface != "" {
-					execCommand(fmt.Sprintf("ip link set %s up 2>/dev/null", iface)).Run()
+					_, _ = utils.ExecuteArgv("ip", "link", "set", iface, "up")
 					time.Sleep(1 * time.Second)
 				}
 			}
@@ -84,9 +84,15 @@ func WifiToggleHandler(c *fiber.Ctx) error {
 	}
 
 	if iface == "" {
-		iwOut, iwErr := execCommand("iwconfig 2>/dev/null | grep -i 'wlan' | head -1 | awk '{print $1}'").CombinedOutput()
-		if iwErr == nil {
-			iface = strings.TrimSpace(string(iwOut))
+		// `iwconfig | grep wlan | head -1 | awk '{print $1}'` → parseo en Go.
+		if iwOut, iwErr := utils.ExecuteArgv("iwconfig"); iwErr == nil {
+			for _, line := range strings.Split(iwOut, "\n") {
+				fields := strings.Fields(line)
+				if len(fields) > 0 && strings.Contains(strings.ToLower(fields[0]), "wlan") {
+					iface = fields[0]
+					break
+				}
+			}
 		}
 	}
 
@@ -95,15 +101,14 @@ func WifiToggleHandler(c *fiber.Ctx) error {
 		isDown := strings.Contains(strings.ToLower(string(statusOut)), "down") || strings.Contains(strings.ToLower(string(statusOut)), "disabled")
 
 		if isDown {
-			execCommand("rfkill unblock wifi 2>/dev/null").Run()
-			execCommand(fmt.Sprintf("ip link set %s up 2>/dev/null", iface)).Run()
-			execCommand(fmt.Sprintf("ifconfig %s up 2>/dev/null", iface)).Run()
+			_, _ = utils.ExecuteArgv("rfkill", "unblock", "wifi")
+			_, _ = utils.ExecuteArgv("ip", "link", "set", iface, "up")
+			_, _ = utils.ExecuteArgv("ifconfig", iface, "up")
 			time.Sleep(1 * time.Second)
 			database.InsertLog("INFO", database.LogMsg("WiFi activado en interfaz "+iface, user.Username), "wifi", &userID)
 			return c.JSON(fiber.Map{"success": true, "message": fmt.Sprintf("WiFi activado en interfaz %s", iface)})
 		} else {
-			iwCmd := fmt.Sprintf("ifconfig %s down", iface)
-			execCommand(iwCmd + " 2>/dev/null").Run()
+			_, _ = utils.ExecuteArgv("ifconfig", iface, "down")
 			database.InsertLog("INFO", database.LogMsg("WiFi desactivado en interfaz "+iface, user.Username), "wifi", &userID)
 			return c.JSON(fiber.Map{"success": true, "message": fmt.Sprintf("WiFi desactivado en interfaz %s", iface)})
 		}

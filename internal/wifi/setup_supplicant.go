@@ -49,10 +49,12 @@ func installSetupSupplicantConf() error {
 	if err := os.WriteFile(tmp, []byte(setupSupplicantConfContent()), 0600); err != nil {
 		return fmt.Errorf("escribir tmp: %w", err)
 	}
-	cmd := fmt.Sprintf("cp %s %s && chmod 600 %s", tmp, setupSupplicantConfPath, setupSupplicantConfPath)
-	if out, err := execPrivilegedOutput(cmd); err != nil {
+	if _, err := execPrivilegedArgv("cp", tmp, setupSupplicantConfPath); err != nil {
 		_ = os.Remove(tmp)
-		return fmt.Errorf("instalar %s: %v (%s)", setupSupplicantConfPath, err, out)
+		return fmt.Errorf("instalar %s: %v", setupSupplicantConfPath, err)
+	}
+	if _, err := execPrivilegedArgv("chmod", "600", setupSupplicantConfPath); err != nil {
+		log.Printf("Setup supplicant: chmod %s: %v", setupSupplicantConfPath, err)
 	}
 	_ = os.Remove(tmp)
 	return nil
@@ -75,7 +77,7 @@ func StartSetupModeSupplicant() {
 
 	// El unit debe estar preinstalado (install.sh). Sin él, no intervenimos para no dejar wlan0
 	// sin gestor.
-	if out, err := execPrivilegedOutput("systemctl list-unit-files " + setupSupplicantUnit); err != nil || !strings.Contains(out, setupSupplicantUnit) {
+	if out, err := execPrivilegedArgv("systemctl", "list-unit-files", setupSupplicantUnit); err != nil || !strings.Contains(out, setupSupplicantUnit) {
 		log.Printf("Setup supplicant: unit %s no instalada; se mantiene wlan0 en NetworkManager", setupSupplicantUnit)
 		return
 	}
@@ -86,13 +88,13 @@ func StartSetupModeSupplicant() {
 	}
 
 	// Sacar wlan0 de NetworkManager (efecto inmediato): NM libera la interfaz y deja de escanearla.
-	if out, err := execPrivilegedOutput(fmt.Sprintf("nmcli device set %s managed no", iface)); err != nil {
+	if out, err := execPrivilegedArgv("nmcli", "device", "set", iface, "managed", "no"); err != nil {
 		log.Printf("Setup supplicant: nmcli managed no: %v (%s)", err, out)
 	}
 	// Margen para que NM suelte la interfaz antes de que el supplicant dedicado la tome.
 	time.Sleep(1500 * time.Millisecond)
 
-	if out, err := execPrivilegedOutput(fmt.Sprintf("systemctl restart %s", setupSupplicantUnit)); err != nil {
+	if out, err := execPrivilegedArgv("systemctl", "restart", setupSupplicantUnit); err != nil {
 		log.Printf("Setup supplicant: restart unit: %v (%s)", err, out)
 		revertSetupModeSupplicant(iface)
 		return
@@ -120,17 +122,15 @@ func StopSetupModeSupplicant() {
 }
 
 func revertSetupModeSupplicant(iface string) {
-	_, _ = execPrivilegedOutput(fmt.Sprintf("systemctl stop %s", setupSupplicantUnit))
-	if out, err := execPrivilegedOutput(fmt.Sprintf("nmcli device set %s managed yes", iface)); err != nil {
+	_, _ = execPrivilegedArgv("systemctl", "stop", setupSupplicantUnit)
+	if out, err := execPrivilegedArgv("nmcli", "device", "set", iface, "managed", "yes"); err != nil {
 		log.Printf("Setup supplicant: nmcli managed yes: %v (%s)", err, out)
 	}
 	// Recargar NetworkManager para que reconozca la configuración de wpa_supplicant escrita por el wizard
 	// Esto es necesario para que NetworkManager se conecte automáticamente a la red guardada después del reinicio
-	if out, err := execPrivilegedOutput("nmcli connection reload 2>/dev/null || true"); err != nil {
-		log.Printf("Setup supplicant: nmcli connection reload: %v (%s)", err, strings.TrimSpace(out))
-	}
+	_, _ = execPrivilegedArgv("nmcli", "connection", "reload")
 	// Opcionalmente, intentar reconectar la interfaz para forzar la conexión inmediata
-	if out, err := execPrivilegedOutput(fmt.Sprintf("nmcli device connect %s 2>/dev/null || true", iface)); err != nil {
-		log.Printf("Setup supplicant: nmcli device connect: %v (%s)", err, strings.TrimSpace(out))
+	if _, err := execPrivilegedArgv("nmcli", "device", "connect", iface); err != nil {
+		log.Printf("Setup supplicant: nmcli device connect: %v", err)
 	}
 }

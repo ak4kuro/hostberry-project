@@ -82,7 +82,7 @@ func WifiSetupInfoHandler(c *fiber.Ctx) error {
 
 // regulatoryCountry lee el dominio regulatorio actual con `iw reg get` (p. ej. "ES").
 func regulatoryCountry() string {
-	out, err := execPrivilegedOutputTimeout("iw reg get", 3*time.Second)
+	out, err := execPrivilegedArgvTimeout([]string{"iw", "reg", "get"}, 3*time.Second)
 	if err != nil {
 		return ""
 	}
@@ -110,7 +110,7 @@ var (
 
 func driverSupportsCSA() bool {
 	csaOnce.Do(func() {
-		out, err := execPrivilegedOutputTimeout("iw list", 5*time.Second)
+		out, err := execPrivilegedArgvTimeout([]string{"iw", "list"}, 5*time.Second)
 		if err != nil || strings.TrimSpace(out) == "" {
 			csaSupported = false
 			return

@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"hostberry/internal/database"
 	middleware "hostberry/internal/middleware"
+	"hostberry/internal/utils"
 )
 
 func WifiSoftwareSwitchHandler(c *fiber.Ctx) error {
@@ -24,32 +25,32 @@ func WifiSoftwareSwitchHandler(c *fiber.Ctx) error {
 		return c.Status(500).JSON(fiber.Map{"success": false, "error": errorMsg})
 	}
 
-	statusOut, _ := execCommand("rfkill list wifi 2>/dev/null | grep -i 'soft blocked'").CombinedOutput()
-	statusStr := strings.ToLower(string(statusOut))
-	isBlocked := strings.Contains(statusStr, "yes")
+	statusOut, _ := utils.ExecuteArgv("rfkill", "list", "wifi")
+	statusStr := strings.ToLower(statusOut)
+	isBlocked := strings.Contains(statusStr, "soft blocked: yes")
 
-	var cmd string
+	var rfkillArgs []string
 	var action string
 	if isBlocked {
-		cmd = "rfkill unblock wifi"
+		rfkillArgs = []string{"rfkill", "unblock", "wifi"}
 		action = "desbloqueado"
 	} else {
-		cmd = "rfkill block wifi"
+		rfkillArgs = []string{"rfkill", "block", "wifi"}
 		action = "bloqueado"
 	}
 
-	output, err := execCommand(cmd + " 2>&1").CombinedOutput()
+	output, err := utils.ExecuteArgv(rfkillArgs...)
 	if err != nil {
-		errorMsg := fmt.Sprintf("Error ejecutando rfkill: %s", string(output))
+		errorMsg := fmt.Sprintf("Error ejecutando rfkill: %s", output)
 		database.InsertLog("ERROR", database.LogMsgErr("cambiar conmutador de software WiFi", errorMsg, user.Username), "wifi", &userID)
 		return c.Status(500).JSON(fiber.Map{"success": false, "error": errorMsg})
 	}
 
 	time.Sleep(1 * time.Second)
 
-	newStatusOut, _ := execCommand("rfkill list wifi 2>/dev/null | grep -i 'soft blocked'").CombinedOutput()
-	newStatusStr := strings.ToLower(string(newStatusOut))
-	newIsBlocked := strings.Contains(newStatusStr, "yes")
+	newStatusOut, _ := utils.ExecuteArgv("rfkill", "list", "wifi")
+	newStatusStr := strings.ToLower(newStatusOut)
+	newIsBlocked := strings.Contains(newStatusStr, "soft blocked: yes")
 
 	if isBlocked == newIsBlocked {
 		errorMsg := "El switch de software no cambió de estado"

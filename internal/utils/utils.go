@@ -79,79 +79,10 @@ func CreateDefaultAdmin() {
 	}
 }
 
-// ExecuteCommand ejecuta un comando permitido con timeout por defecto.
-func ExecuteCommand(cmd string) (string, error) {
-	return ExecuteCommandWithTimeout(cmd, defaultCommandTimeout)
-}
-
-// ExecuteCommandWithTimeout ejecuta un comando permitido con caché y timeout.
-// El caché solo aplica a comandos de solo lectura que terminan bien: cachear
-// errores o comandos de escritura devuelve estado obsoleto tras mutaciones.
-func ExecuteCommandWithTimeout(cmd string, timeout time.Duration) (string, error) {
-	cacheable := commandIsReadOnly(cmd)
-	cacheKey := cmd + "|" + timeout.String()
-
-	if cacheable {
-		cacheMutex.RLock()
-		if cached, exists := commandCache[cacheKey]; exists {
-			if time.Since(cached.timestamp) < cacheTTL {
-				cacheMutex.RUnlock()
-				return cached.output, cached.err
-			}
-		}
-		cacheMutex.RUnlock()
-	}
-
-	if err := validateShellCommandAllowList(cmd, allowedShellCommands); err != nil {
-		return "", err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	baseCmd := execCommand(cmd)
-	cmdObj := exec.CommandContext(ctx, baseCmd.Path)
-	cmdObj.Args = baseCmd.Args
-	cmdObj.Env = append(os.Environ(),
-		"SUDO_ASKPASS=/bin/false",
-		"SUDO_LOG_FILE=",
-		"HOSTNAME="+getHostname(),
-	)
-
-	out, err := cmdObj.CombinedOutput()
-	outputStr := FilterSudoErrorString(string(out))
-
-	if err != nil {
-		if ctx.Err() == context.DeadlineExceeded {
-			err = exec.ErrNotFound
-		}
-		if outputStr == "" {
-			return "", err
-		}
-	}
-
-	result := strings.TrimSpace(outputStr)
-
-	if cacheable && err == nil {
-		cacheMutex.Lock()
-		commandCache[cacheKey] = &cachedResult{output: result, timestamp: time.Now()}
-		if len(commandCache) > 100 {
-			for k := range commandCache {
-				if time.Since(commandCache[k].timestamp) > cacheTTL*2 {
-					delete(commandCache, k)
-				}
-			}
-		}
-		cacheMutex.Unlock()
-	}
-
-	return result, err
-}
-
-// allowedShellCommands es la allowlist de comandos base permitidos en cadenas
-// shell. No se permiten shells ("sh"/"bash"): la cadena completa ya se ejecuta
-// con "sh -c" internamente y permitirlos permitiría escapar del allowlist.
-var allowedShellCommands = []string{
+// allowedCommands es la allowlist de binarios permitidos para ejecución argv.
+// Al no pasar por un shell, los argumentos se entregan literalmente al binario:
+// no hay sintaxis que interpretar ni comandos encadenados que validar.
+var allowedCommands = []string{
 	"hostname", "hostnamectl", "uname", "cat", "grep", "awk", "sed", "cut", "head", "tail",
 	"top", "free", "df", "nproc", "journalctl",
 	"iwlist", "nmcli", "iw",
@@ -163,258 +94,6 @@ var allowedShellCommands = []string{
 	"udevadm",
 	"apt-get", "apt",
 	"true",
-}
-
-// ValidateShellCommand exporta la validación del allowlist para paquetes que
-// construyen comandos shell propios (p. ej. execPrivilegedOutput en wifi).
-func ValidateShellCommand(cmd string) error {
-	return validateShellCommandAllowList(cmd, allowedShellCommands)
-}
-
-func validateShellCommandAllowList(cmd string, allowedCommands []string) error {
-	// Caracteres que típicamente permiten encadenar instrucciones o sustituciones.
-	// Mitigan inyección cuando "cmd" viene construido con variables.
-	if strings.ContainsAny(cmd, ";\n\r`$") {
-		return exec.ErrNotFound
-	}
-
-	// `&` suelto es un separador de comandos en shell (background). Solo se
-	// permite dentro de la redirección `2>&1` (el `&` va precedido de `>`).
-	// Sin este chequeo, `cmd&otro` colaría `otro` sin validar en el allowlist.
-	if hasIllegalAmpersand(cmd) {
-		return exec.ErrNotFound
-	}
-
-	// Hardening extra: desactivar redirecciones arbitrarias.
-	// Permitimos únicamente:
-	// - `>/dev/null`, `2>/dev/null`, `1>/dev/null` (con o sin espacios)
-	// - `2>&1` (combinación típica de stderr->stdout)
-	// Prohibimos:
-	// - cualquier uso de `>>` (append)
-	// - cualquier uso de `<` (input redirect)
-	if strings.Contains(cmd, "<") {
-		return exec.ErrNotFound
-	}
-	if strings.Contains(cmd, ">>") {
-		return exec.ErrNotFound
-	}
-	// Recorremos cada '>' y validamos su destino.
-	for i := 0; ; {
-		relIdx := strings.IndexByte(cmd[i:], '>')
-		if relIdx < 0 {
-			break
-		}
-		idx := i + relIdx
-
-		// Permitir únicamente el patrón exacto `2>&1` (sin espacios).
-		// Ej: " ... 2>&1"
-		if idx > 0 &&
-			cmd[idx-1] == '2' &&
-			idx+2 < len(cmd) &&
-			cmd[idx+1] == '&' &&
-			cmd[idx+2] == '1' {
-			i = idx + 1
-			continue
-		}
-
-		// Permitir redirect a /dev/null.
-		j := idx + 1
-		for j < len(cmd) && (cmd[j] == ' ' || cmd[j] == '\t') {
-			j++
-		}
-		if !strings.HasPrefix(cmd[j:], "/dev/null") {
-			return exec.ErrNotFound
-		}
-
-		i = idx + 1
-	}
-
-	// Construimos set para validar tokens base por átomo.
-	allowed := make(map[string]struct{}, len(allowedCommands))
-	for _, a := range allowedCommands {
-		allowed[a] = struct{}{}
-	}
-
-	tokens := shellTokenizeForAllowList(cmd)
-	if tokens == nil {
-		// Quoting no balanceado o tokenización inválida.
-		return exec.ErrNotFound
-	}
-	if len(tokens) == 0 {
-		return nil
-	}
-
-	// Validamos el comando base en cada átomo separado por operadores.
-	// Operadores permitidos: pipes y lógica (||, &&).
-	// (Los operadores se usan en el código actual para "|| true" y pipelines de grep/awk).
-	expectCommand := true
-	sawCommand := false
-
-	for _, tok := range tokens {
-		switch tok {
-		case "|", "||", "&&":
-			expectCommand = true
-			continue
-		}
-
-		if !expectCommand {
-			continue
-		}
-
-		// Saltamos "sudo" como prefijo del comando base.
-		if tok == "sudo" {
-			continue
-		}
-
-		base := strings.Trim(tok, `"'`)
-		if base == "" {
-			return exec.ErrNotFound
-		}
-
-		if _, ok := allowed[base]; !ok {
-			return exec.ErrNotFound
-		}
-
-		sawCommand = true
-		expectCommand = false
-	}
-
-	if !sawCommand {
-		return exec.ErrNotFound
-	}
-
-	return nil
-}
-
-// hasIllegalAmpersand detecta `&` usados como operador de shell fuera de
-// comillas. Se permite únicamente el patrón `>&` (p. ej. `2>&1`); cualquier
-// otro `&` suelto o `&&`... (`&&` se tokeniza como operador válido) se
-// considera ilegal salvo el de redirección.
-func hasIllegalAmpersand(cmd string) bool {
-	inSingle, inDouble := false, false
-	for i := 0; i < len(cmd); i++ {
-		ch := cmd[i]
-		if inSingle {
-			if ch == '\'' {
-				inSingle = false
-			}
-			continue
-		}
-		if inDouble {
-			if ch == '\\' && i+1 < len(cmd) {
-				i++
-				continue
-			}
-			if ch == '"' {
-				inDouble = false
-			}
-			continue
-		}
-		switch ch {
-		case '\'':
-			inSingle = true
-		case '"':
-			inDouble = true
-		case '&':
-			if i+1 < len(cmd) && cmd[i+1] == '&' {
-				i++
-				continue
-			}
-			// `>&` es la redirección `2>&1` (ya validada por la regla de `>`).
-			if i > 0 && cmd[i-1] == '>' {
-				continue
-			}
-			return true
-		}
-	}
-	return false
-}
-
-// shellTokenizeForAllowList separa tokens respetando comillas simples y dobles para que
-// validateShellCommandAllowList no dependa de strings.Fields (que rompe tokens dentro de quotes).
-//
-// No es un parser de shell completo: solo necesita aislar comandos base y operadores |, ||, && fuera de quotes.
-func shellTokenizeForAllowList(cmd string) []string {
-	var tokens []string
-	var cur strings.Builder
-
-	inSingle := false
-	inDouble := false
-
-	flush := func() {
-		if cur.Len() > 0 {
-			tokens = append(tokens, cur.String())
-			cur.Reset()
-		}
-	}
-
-	// Nota: iteramos por bytes porque este validator trabaja con ASCII de comandos.
-	for i := 0; i < len(cmd); i++ {
-		ch := cmd[i]
-
-		if inSingle {
-			if ch == '\'' {
-				inSingle = false
-				continue
-			}
-			cur.WriteByte(ch)
-			continue
-		}
-
-		if inDouble {
-			// '\"' y '\\' dentro de comillas dobles son escapes: no deben
-			// cerrar/reabrir el estado de comillas.
-			if ch == '\\' && i+1 < len(cmd) {
-				cur.WriteByte(ch)
-				cur.WriteByte(cmd[i+1])
-				i++
-				continue
-			}
-			if ch == '"' {
-				inDouble = false
-				continue
-			}
-			// Dentro de dobles comillas mantenemos el contenido tal cual; el allowlist
-			// valida solo comandos base y operadores.
-			cur.WriteByte(ch)
-			continue
-		}
-
-		switch ch {
-		case '\'':
-			inSingle = true
-		case '"':
-			inDouble = true
-		case ' ', '\t', '\r', '\n':
-			flush()
-		case '|':
-			flush()
-			if i+1 < len(cmd) && cmd[i+1] == '|' {
-				tokens = append(tokens, "||")
-				i++
-			} else {
-				tokens = append(tokens, "|")
-			}
-		case '&':
-			flush()
-			if i+1 < len(cmd) && cmd[i+1] == '&' {
-				tokens = append(tokens, "&&")
-				i++
-			} else {
-				// `&` suelto puede aparecer en redirecciones tipo `2>&1`.
-				// Lo tratamos como carácter normal del token.
-				cur.WriteByte('&')
-			}
-		default:
-			cur.WriteByte(ch)
-		}
-	}
-
-	if inSingle || inDouble {
-		return nil
-	}
-	flush()
-	return tokens
 }
 
 // FilterSudoErrors filtra líneas típicas de errores de `sudo`.
@@ -487,37 +166,11 @@ func detectSudo() bool {
 	return err == nil
 }
 
-func execCommand(cmd string) *exec.Cmd {
-	cmd = strings.TrimSpace(cmd)
-	cmd = strings.TrimPrefix(cmd, "sudo ")
-
-	if os.Geteuid() == 0 {
-		return exec.Command("/bin/sh", "-c", cmd)
-	}
-
-	if canUseSudo() {
-		if priv := privilegedExecPath(); priv != "" {
-			if _, err := os.Stat(priv); err == nil {
-				return exec.Command("sudo", priv, cmd)
-			}
-		}
-		cmd = "sudo " + cmd
-	}
-
-	return exec.Command("/bin/sh", "-c", cmd)
-}
-
 func privilegedExecPath() string {
 	if p := strings.TrimSpace(os.Getenv("HOSTBERRY_PRIVILEGED_EXEC")); p != "" {
 		return p
 	}
 	return "/usr/local/sbin/hostberry-safe/privileged-exec"
-}
-
-// ExecCommand es un wrapper exportado para que el paquete main pueda usar
-// el helper sin tener que re-implementar la lógica de sudo/no-sudo.
-func ExecCommand(cmd string) *exec.Cmd {
-	return execCommand(cmd)
 }
 
 // validateArgvAllowList comprueba que el binario de una invocación argv esté
@@ -531,7 +184,7 @@ func validateArgvAllowList(args []string) error {
 	if idx := strings.LastIndexByte(base, '/'); idx >= 0 {
 		base = base[idx+1:]
 	}
-	for _, a := range allowedShellCommands {
+	for _, a := range allowedCommands {
 		if base == a {
 			return nil
 		}
@@ -642,50 +295,6 @@ func ExecuteArgvWithTimeout(args []string, timeout time.Duration) (string, error
 	return result, err
 }
 
-// commandIsReadOnly indica si todos los comandos de la cadena son de solo
-// lectura. Solo esos resultados son seguros de cachear: cachear comandos de
-// escritura (o lecturas que pueden mutar, como `wpa_cli scan`) devolvería
-// estado obsoleto tras cambios.
-func commandIsReadOnly(cmd string) bool {
-	tokens := shellTokenizeForAllowList(cmd)
-	if tokens == nil || len(tokens) == 0 {
-		return false
-	}
-
-	var base string
-	var args []string
-	flushAtom := func() bool {
-		if base == "" {
-			return true
-		}
-		return isReadOnlyInvocation(base, args)
-	}
-
-	expectCommand := true
-	for _, tok := range tokens {
-		switch tok {
-		case "|", "||", "&&":
-			if !flushAtom() {
-				return false
-			}
-			base, args = "", nil
-			expectCommand = true
-			continue
-		}
-
-		if !expectCommand {
-			args = append(args, tok)
-			continue
-		}
-		if tok == "sudo" {
-			continue
-		}
-		base = strings.Trim(tok, `"'`)
-		expectCommand = false
-	}
-	return flushAtom()
-}
-
 func argsContainAny(args []string, words ...string) bool {
 	for _, a := range args {
 		a = strings.Trim(a, `"'`)
@@ -778,12 +387,6 @@ func isReadOnlyInvocation(base string, args []string) bool {
 	default:
 		return false
 	}
-}
-
-func clearCommandCache() {
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
-	commandCache = make(map[string]*cachedResult)
 }
 
 // StrconvAtoiSafe parsea un string como entero positivo (solo dígitos), sin usar strconv.Atoi.

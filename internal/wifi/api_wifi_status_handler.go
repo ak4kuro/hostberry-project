@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
+	"hostberry/internal/utils"
 )
 
 func wifiRuntimeStatusHandler(c *fiber.Ctx) error {
@@ -15,10 +16,9 @@ func wifiRuntimeStatusHandler(c *fiber.Ctx) error {
 	var hardBlocked bool = false
 	var softBlocked bool = false
 
-	wifiCheck := execCommand("nmcli -t -f WIFI g 2>/dev/null")
-	wifiOut, err := wifiCheck.Output()
+	wifiOutStr, err := utils.ExecuteArgv("nmcli", "-t", "-f", "WIFI", "g")
 	if err == nil {
-		wifiState := strings.ToLower(strings.TrimSpace(filterSudoErrors(wifiOut)))
+		wifiState := strings.ToLower(strings.TrimSpace(wifiOutStr))
 		if strings.Contains(wifiState, "enabled") || strings.Contains(wifiState, "on") {
 			enabled = true
 		} else if strings.Contains(wifiState, "disabled") || strings.Contains(wifiState, "off") {
@@ -26,8 +26,8 @@ func wifiRuntimeStatusHandler(c *fiber.Ctx) error {
 		}
 	}
 
-	rfkillOut, _ := execCommand("rfkill list wifi 2>/dev/null").CombinedOutput()
-	rfkillStr := strings.ToLower(filterSudoErrors(rfkillOut))
+	rfkillOutStr, _ := utils.ExecuteArgv("rfkill", "list", "wifi")
+	rfkillStr := strings.ToLower(rfkillOutStr)
 	if strings.Contains(rfkillStr, "hard blocked: yes") {
 		hardBlocked = true
 		enabled = false
@@ -35,12 +35,19 @@ func wifiRuntimeStatusHandler(c *fiber.Ctx) error {
 		softBlocked = true
 		enabled = false
 	} else {
-		iwOut, _ := execCommand("iwconfig 2>/dev/null | grep -i 'wlan' | head -1").CombinedOutput()
-		cleanIwOut := filterSudoErrors(iwOut)
-		if len(cleanIwOut) > 0 {
-			iwStatus, _ := execCommand("iwconfig 2>/dev/null | grep -i 'wlan' | head -1 | grep -i 'unassociated'").CombinedOutput()
-			cleanIwStatus := filterSudoErrors(iwStatus)
-			if len(cleanIwStatus) == 0 {
+		// `iwconfig | grep -i wlan | head -1` → primera línea wlan en Go.
+		iwOutStr, _ := utils.ExecuteArgv("iwconfig")
+		var iwFirstWlan string
+		for _, line := range strings.Split(iwOutStr, "\n") {
+			if strings.Contains(strings.ToLower(line), "wlan") {
+				iwFirstWlan = line
+				break
+			}
+		}
+		if iwFirstWlan != "" {
+			// Segunda consulta del pipeline original: ¿la primera línea wlan
+			// contiene "unassociated"?
+			if !strings.Contains(strings.ToLower(iwFirstWlan), "unassociated") {
 				enabled = true
 			}
 		} else {
@@ -92,8 +99,16 @@ func wifiRuntimeStatusHandler(c *fiber.Ctx) error {
 	}
 
 	if !connected || ssid == "" {
-		iwOut, _ := execCommand("iwconfig 2>/dev/null | grep -i 'essid' | grep -v 'off/any' | head -1").CombinedOutput()
-		iwStr := filterSudoErrors(iwOut)
+		// `iwconfig | grep -i essid | grep -v 'off/any' | head -1` → parseo en Go.
+		iwOutStr, _ := utils.ExecuteArgv("iwconfig")
+		var essidLine string
+		for _, line := range strings.Split(iwOutStr, "\n") {
+			if strings.Contains(strings.ToLower(line), "essid") && !strings.Contains(line, "off/any") {
+				essidLine = line
+				break
+			}
+		}
+		iwStr := essidLine
 		if strings.Contains(iwStr, "ESSID:") {
 			parts := strings.Split(iwStr, "ESSID:")
 			if len(parts) > 1 {

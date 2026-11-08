@@ -40,11 +40,6 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	return os.Rename(tmpName, path)
 }
 
-// executeCommand proxy para mantener compatibilidad interna con el código original.
-func executeCommand(cmd string) (string, error) {
-	return utils.ExecuteCommand(cmd)
-}
-
 func executeArgv(args ...string) (string, error) {
 	return utils.ExecuteArgv(args...)
 }

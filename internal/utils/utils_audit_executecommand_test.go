@@ -6,7 +6,6 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 )
 
@@ -29,105 +28,61 @@ func findRepoRoot(t *testing.T) string {
 	}
 }
 
-func allowedCommandsForAudit() []string {
-	// Copia (mecánica) de la lista allowlist usada en ExecuteCommandWithTimeout.
-	return []string{
-		// Nota seguridad: no permitimos shells como "sh" o "bash" desde executeCommand.
-		"hostname", "hostnamectl", "uname", "cat", "grep", "awk", "sed", "cut", "head", "tail",
-		"top", "free", "df", "nproc",
-		"iwlist", "nmcli", "iw",
-		"ip", "wg", "wg-quick", "systemctl", "pgrep",
-		"reboot", "shutdown", "poweroff",
-		"rfkill", "ifconfig", "iwconfig",
-		"hostapd", "hostapd_cli", "dnsmasq", "iptables", "iptables-save", "netfilter-persistent", "sysctl", "tee", "cp", "mkdir", "echo", "chmod",
-		"dhclient", "udhcpc", "wpa_supplicant", "wpa_cli", "pkill", "killall",
-		"true",
-	}
-}
-
-func TestAudit_ExecuteCommandStringLiterals_AreAllowlisted(t *testing.T) {
+// TestAudit_NoShellExecCallsRemain verifica que no se reintroduce el path de
+// ejecución shell (ExecuteCommand/ExecCommand/execCommand con cadena). Toda la
+// ejecución de comandos del proyecto debe ir por ExecuteArgv/ExecuteArgvWithTimeout
+// o exec.Command con argumentos separados.
+func TestAudit_NoShellExecCallsRemain(t *testing.T) {
 	root := findRepoRoot(t)
-	allowed := allowedCommandsForAudit()
-	utilsPkgPath := filepath.Join(root, "internal", "utils")
 
-	failed := 0
-	var failExamples []string
+	// Nombres prohibidos: el API shell fue eliminada de utils; cualquier
+	// referencia externa es una regresión. execCommand interno de utils ya no
+	// existe, así que tampoco debe aparecer.
+	forbidden := map[string]bool{
+		"ExecuteCommand":            true,
+		"ExecuteCommandWithTimeout": true,
+		"ExecCommand":               true,
+		"ValidateShellCommand":      true,
+	}
 
-	parseFile := func(path string) {
+	var failures []string
+
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		// Los propios tests de este archivo mencionan los nombres.
+		if filepath.Base(path) == "utils_audit_executecommand_test.go" {
+			return nil
+		}
+		// utils.go ya no define estas funciones; si el AST las referencia
+		// fuera de comentarios, es una llamada real.
 		fset := token.NewFileSet()
 		f, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 		if err != nil {
-			// Ignoramos archivos que no parseen (poco frecuente; no deben bloquear el audit).
-			return
+			return nil
 		}
-
 		ast.Inspect(f, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
 				return true
 			}
-
-			// Detectar llamadas: ExecuteCommand("...") dentro del paquete utils
-			// y utils.ExecuteCommand("...") fuera del paquete.
-			isRelevant := false
-			inUtilsPackage := filepath.Dir(path) == utilsPkgPath
 			switch fn := call.Fun.(type) {
 			case *ast.SelectorExpr:
-				if xIdent, ok := fn.X.(*ast.Ident); ok && xIdent.Name == "utils" && fn.Sel != nil && fn.Sel.Name == "ExecuteCommand" {
-					isRelevant = true
+				if fn.Sel != nil && forbidden[fn.Sel.Name] {
+					failures = append(failures, path+": utils."+fn.Sel.Name)
 				}
 			case *ast.Ident:
-				if inUtilsPackage && fn.Name == "ExecuteCommand" {
-					isRelevant = true
+				if forbidden[fn.Name] {
+					failures = append(failures, path+": "+fn.Name)
 				}
 			}
-			if !isRelevant {
-				return true
-			}
-
-			if len(call.Args) == 0 {
-				return true
-			}
-
-			lit, ok := call.Args[0].(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				// Solo auditar literales: dinámicos (fmt.Sprintf/variables) pueden necesitar evaluación.
-				return true
-			}
-
-			cmd, err := strconv.Unquote(lit.Value)
-			if err != nil {
-				return true
-			}
-			if cmd == "" {
-				return true
-			}
-
-			if err := validateShellCommandAllowList(cmd, allowed); err != nil {
-				failed++
-				failExamples = append(failExamples, path+": "+err.Error()+" cmd="+cmd)
-			}
-
 			return true
 		})
-	}
-
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if filepath.Ext(path) != ".go" {
-			return nil
-		}
-		parseFile(path)
 		return nil
 	})
 
-	if failed > 0 {
-		t.Fatalf("Audit failed: %d executeCommand/ExecuteCommand string literals are NOT allowlisted. Examples: %v", failed, failExamples)
+	if len(failures) > 0 {
+		t.Fatalf("Shell exec API reintroduced: %v. Use ExecuteArgv/ExecuteArgvWithTimeout instead.", failures)
 	}
 }
-

@@ -17,13 +17,8 @@ import (
 	"hostberry/internal/wifi"
 )
 
-// executeCommand delega al helper seguro en internal/utils.
-func executeCommand(cmd string) (string, error) {
-	return utils.ExecuteCommand(cmd)
-}
-
-// executeArgv ejecuta un comando como argv (sin shell) con la misma lógica
-// de sudo/privileged-exec que executeCommand.
+// executeArgv ejecuta un comando como argv (sin shell) delegando en
+// internal/utils, que aplica la lógica de sudo/privileged-exec.
 func executeArgv(args ...string) (string, error) {
 	return utils.ExecuteArgv(args...)
 }

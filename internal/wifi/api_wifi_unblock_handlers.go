@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"hostberry/internal/database"
 	middleware "hostberry/internal/middleware"
+	"hostberry/internal/utils"
 )
 
 func WifiUnblockHandler(c *fiber.Ctx) error {
@@ -23,29 +24,27 @@ func WifiUnblockHandler(c *fiber.Ctx) error {
 	var lastError error
 
 	if _, err := exec.LookPath("rfkill"); err == nil {
-		rfkillOut, rfkillErr := execCommand("rfkill list wifi 2>/dev/null | grep -i 'wifi' | head -1").CombinedOutput()
-		if rfkillErr == nil && strings.Contains(strings.ToLower(string(rfkillOut)), "wifi") {
-			rfkillCmd := "rfkill unblock wifi"
-			rfkillOutSudo, rfkillUnblockErr := execCommand(rfkillCmd + " 2>&1").CombinedOutput()
+		rfkillOut, rfkillErr := utils.ExecuteArgv("rfkill", "list", "wifi")
+		if rfkillErr == nil && strings.Contains(strings.ToLower(rfkillOut), "wifi") {
+			rfkillOutSudo, rfkillUnblockErr := utils.ExecuteArgv("rfkill", "unblock", "wifi")
 			if rfkillUnblockErr == nil {
 				success = true
 				method = "rfkill (con sudo)"
 			} else {
-				lastError = fmt.Errorf("rfkill error: %s", string(rfkillOutSudo))
+				lastError = fmt.Errorf("rfkill error: %s", rfkillOutSudo)
 			}
 		}
 	}
 
 	if !success {
 		if _, err := exec.LookPath("nmcli"); err == nil {
-			nmcliCmd := "nmcli radio wifi on"
-			nmcliOut, nmcliErr := execCommand(nmcliCmd + " 2>&1").CombinedOutput()
+			nmcliOut, nmcliErr := utils.ExecuteArgv("nmcli", "radio", "wifi", "on")
 			if nmcliErr == nil {
 				success = true
 				method = "nmcli (con sudo)"
 			} else {
 				if lastError == nil {
-					lastError = fmt.Errorf("nmcli error: %s", string(nmcliOut))
+					lastError = fmt.Errorf("nmcli error: %s", nmcliOut)
 				}
 			}
 		}
@@ -53,7 +52,7 @@ func WifiUnblockHandler(c *fiber.Ctx) error {
 
 	if success && method == "rfkill (con sudo)" {
 		if _, err := exec.LookPath("nmcli"); err == nil {
-			execCommand("nmcli radio wifi on 2>/dev/null").Run()
+			_, _ = utils.ExecuteArgv("nmcli", "radio", "wifi", "on")
 		}
 	}
 

@@ -83,10 +83,10 @@ func SetWizardAPBand(band string) (channel int, actualBand string, err error) {
 	if err := writeHostapdChannelMode(ch, mode); err != nil {
 		return 0, "", fmt.Errorf("no se pudo escribir hostapd.conf: %w", err)
 	}
-	if out, restartErr := execPrivilegedOutput("systemctl restart hostapd"); restartErr != nil {
+	if out, restartErr := execPrivilegedArgv("systemctl", "restart", "hostapd"); restartErr != nil {
 		return 0, "", fmt.Errorf("no se pudo reiniciar hostapd: %v (%s)", restartErr, strings.TrimSpace(out))
 	}
-	_, _ = execPrivilegedOutput("systemctl restart dnsmasq")
+	_, _ = execPrivilegedArgv("systemctl", "restart", "dnsmasq")
 	time.Sleep(2 * time.Second)
 	return finalizeWizardAPBand(band, ch)
 }
@@ -120,7 +120,7 @@ func apLinkFrequency() int {
 	if freq := linkFrequencyFromIwDev(apCSAInterface); freq > 0 {
 		return freq
 	}
-	out, err := execPrivilegedOutputTimeout("iw dev "+apCSAInterface+" info", 3*time.Second)
+	out, err := execPrivilegedArgvTimeout([]string{"iw", "dev", apCSAInterface, "info"}, 3*time.Second)
 	if err != nil {
 		return 0
 	}

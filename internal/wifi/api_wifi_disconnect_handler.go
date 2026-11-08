@@ -9,6 +9,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"hostberry/internal/database"
 	middleware "hostberry/internal/middleware"
+	"hostberry/internal/utils"
 )
 
 func WifiDisconnectHandler(c *fiber.Ctx) error {
@@ -22,24 +23,27 @@ func WifiDisconnectHandler(c *fiber.Ctx) error {
 		userID = &id
 	}
 
-	activeConnCmd := execCommand("nmcli -t -f NAME,TYPE,DEVICE connection show --active | grep -i wifi")
-	activeConnOut, err := activeConnCmd.Output()
+	// `nmcli -t ... | grep -i wifi` → argv + filtro en Go.
+	activeConnOut, err := utils.ExecuteArgv("nmcli", "-t", "-f", "NAME,TYPE,DEVICE", "connection", "show", "--active")
 
 	var connectionName string
-	if err == nil && len(activeConnOut) > 0 {
-		lines := strings.Split(strings.TrimSpace(string(activeConnOut)), "\n")
-		if len(lines) > 0 {
+	if err == nil && activeConnOut != "" {
+		for _, line := range strings.Split(activeConnOut, "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.Contains(strings.ToLower(line), "wireless") {
+				continue
+			}
 			// nmcli -t escapa ':' y '\' dentro de los campos; buscar el primer
 			// separador no escapado para no truncar nombres con ':' dentro.
-			if name, _ := splitNMCLIField(lines[0]); name != "" {
+			if name, _ := splitNMCLIField(line); name != "" {
 				connectionName = unescapeNMCLIField(name)
+				break
 			}
 		}
 	}
 
 	if connectionName != "" {
-		disconnectCmd := execCommand(fmt.Sprintf("nmcli connection down %s", shellQuote(connectionName)))
-		disconnectOut, disconnectErr := disconnectCmd.CombinedOutput()
+		disconnectOut, disconnectErr := utils.ExecuteArgv("nmcli", "connection", "down", connectionName)
 
 		if disconnectErr == nil {
 			if userID != nil {
@@ -48,17 +52,24 @@ func WifiDisconnectHandler(c *fiber.Ctx) error {
 			return c.JSON(fiber.Map{"success": true, "message": "Disconnected from " + connectionName})
 		}
 
-		log.Printf("Error desconectando conexión %s: %s, intentando desconectar dispositivo", connectionName, string(disconnectOut))
+		log.Printf("Error desconectando conexión %s: %s, intentando desconectar dispositivo", connectionName, strings.TrimSpace(disconnectOut))
 	}
 
-	wifiDeviceCmd := execCommand("nmcli -t -f DEVICE,TYPE device status | grep -i wifi | head -1 | cut -d: -f1")
-	wifiDeviceOut, err := wifiDeviceCmd.Output()
+	// `nmcli -t -f DEVICE,TYPE device status | grep -i wifi | head -1 | cut -d: -f1` → argv + parseo.
+	wifiDeviceOut, err := utils.ExecuteArgv("nmcli", "-t", "-f", "DEVICE,TYPE", "device", "status")
 
-	if err == nil && len(wifiDeviceOut) > 0 {
-		deviceName := strings.TrimSpace(string(wifiDeviceOut))
-		if deviceName != "" && validateInterfaceName(deviceName) == nil {
-			deviceDisconnectCmd := execCommand(fmt.Sprintf("nmcli device disconnect %s", shellQuote(deviceName)))
-			deviceDisconnectOut, deviceDisconnectErr := deviceDisconnectCmd.CombinedOutput()
+	if err == nil && wifiDeviceOut != "" {
+		for _, line := range strings.Split(wifiDeviceOut, "\n") {
+			line = strings.TrimSpace(line)
+			fields := strings.SplitN(line, ":", 2)
+			if len(fields) < 2 || !strings.Contains(strings.ToLower(fields[1]), "wifi") {
+				continue
+			}
+			deviceName := strings.TrimSpace(fields[0])
+			if deviceName == "" || validateInterfaceName(deviceName) != nil {
+				break
+			}
+			deviceDisconnectOut, deviceDisconnectErr := utils.ExecuteArgv("nmcli", "device", "disconnect", deviceName)
 
 			if deviceDisconnectErr == nil {
 				if userID != nil {
@@ -67,15 +78,15 @@ func WifiDisconnectHandler(c *fiber.Ctx) error {
 				return c.JSON(fiber.Map{"success": true, "message": "Disconnected from WiFi device " + deviceName})
 			}
 
-			log.Printf("Error desconectando dispositivo %s: %s", deviceName, string(deviceDisconnectOut))
+			log.Printf("Error desconectando dispositivo %s: %s", deviceName, strings.TrimSpace(deviceDisconnectOut))
+			break
 		}
 	}
 
-	networkingOffCmd := execCommand("nmcli networking off")
-	networkingOffOut, networkingOffErr := networkingOffCmd.CombinedOutput()
+	networkingOffOut, networkingOffErr := utils.ExecuteArgv("nmcli", "networking", "off")
 
 	if networkingOffErr != nil {
-		errorMsg := fmt.Sprintf("Error desconectando WiFi: %s", strings.TrimSpace(string(networkingOffOut)))
+		errorMsg := fmt.Sprintf("Error desconectando WiFi: %s", strings.TrimSpace(networkingOffOut))
 		if userID != nil {
 			database.InsertLog("ERROR", database.LogMsgErr("desconectar WiFi", errorMsg, username), "wifi", userID)
 		}
@@ -84,11 +95,10 @@ func WifiDisconnectHandler(c *fiber.Ctx) error {
 
 	time.Sleep(1 * time.Second)
 
-	networkingOnCmd := execCommand("nmcli networking on")
-	networkingOnOut, networkingOnErr := networkingOnCmd.CombinedOutput()
+	networkingOnOut, networkingOnErr := utils.ExecuteArgv("nmcli", "networking", "on")
 
 	if networkingOnErr != nil {
-		errorMsg := fmt.Sprintf("Error reactivando networking: %s", strings.TrimSpace(string(networkingOnOut)))
+		errorMsg := fmt.Sprintf("Error reactivando networking: %s", strings.TrimSpace(networkingOnOut))
 		if userID != nil {
 			database.InsertLog("ERROR", database.LogMsgErr("reactivar red tras desconexión WiFi", errorMsg, username), "wifi", userID)
 		}

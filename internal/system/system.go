@@ -13,12 +13,6 @@ import (
 	"hostberry/internal/utils"
 )
 
-// executeCommand delega al helper seguro en internal/utils.
-// Se mantiene el mismo nombre para minimizar cambios mecánicos al mover el módulo.
-func executeCommand(cmd string) (string, error) {
-	return utils.ExecuteCommand(cmd)
-}
-
 func executeArgv(args ...string) (string, error) {
 	return utils.ExecuteArgv(args...)
 }

@@ -17,11 +17,6 @@ import (
 	"hostberry/internal/validators"
 )
 
-// executeCommand delega al helper seguro en internal/utils.
-func executeCommand(cmd string) (string, error) {
-	return utils.ExecuteCommand(cmd)
-}
-
 func executeArgv(args ...string) (string, error) {
 	return utils.ExecuteArgv(args...)
 }

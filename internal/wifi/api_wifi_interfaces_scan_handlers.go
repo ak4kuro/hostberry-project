@@ -84,7 +84,7 @@ func wifiInterfaceType(iface string) string {
 	if err := validateInterfaceName(iface); err != nil {
 		return ""
 	}
-	out, err := execPrivilegedOutput("iw dev " + iface + " info")
+	out, err := execPrivilegedArgv("iw", "dev", iface, "info")
 	if err != nil {
 		return ""
 	}
@@ -183,4 +183,3 @@ func WifiScanHandler(c *fiber.Ctx) error {
 	}
 	return c.JSON(networks)
 }
-

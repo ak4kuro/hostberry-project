@@ -34,11 +34,6 @@ type TorConfigOptions struct {
 // Rutas típicas del binario tor (por si PATH no incluye /usr/bin en el proceso)
 var torBinaryPaths = []string{"/usr/bin/tor", "/usr/sbin/tor"}
 
-// executeCommand proxy para mantener compatibilidad interna con el código original.
-func executeCommand(cmd string) (string, error) {
-	return utils.ExecuteCommand(cmd)
-}
-
 func executeArgv(args ...string) (string, error) {
 	return utils.ExecuteArgv(args...)
 }
@@ -461,7 +456,7 @@ func runCommandWithOptionalSudo(bin string, args ...string) *exec.Cmd {
 		allArgs := append([]string{bin}, args...)
 		cmd = exec.Command("sudo", allArgs...)
 	}
-	// Mantener comportamiento similar al helper utils.ExecuteCommand.
+	// Mismo entorno que el helper argv de utils: sin prompts de sudo.
 	cmd.Env = append(os.Environ(),
 		"SUDO_ASKPASS=/bin/false",
 		"SUDO_LOG_FILE=",

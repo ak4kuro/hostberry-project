@@ -30,7 +30,7 @@ func EnsureWizardAPBroadcasting(staInterface string) {
 		log.Printf("HostBerry: wizard AP en 2.4 GHz bloqueado por STA en 5 GHz; desconectando upstream")
 		disconnectSTA(staInterface)
 		time.Sleep(1500 * time.Millisecond)
-		_, _ = execPrivilegedOutput("systemctl restart hostapd")
+		_, _ = execPrivilegedArgv("systemctl", "restart", "hostapd")
 	}
 }
 
@@ -72,8 +72,8 @@ func RecoverSetupAPIfNeeded(staInterface string) bool {
 		log.Printf("HostBerry: no se pudo escribir hostapd.conf de recuperación: %v", err)
 		return false
 	}
-	_, _ = execPrivilegedOutput("systemctl reset-failed hostapd")
-	_, _ = execPrivilegedOutput("systemctl start hostapd")
+	_, _ = execPrivilegedArgv("systemctl", "reset-failed", "hostapd")
+	_, _ = execPrivilegedArgv("systemctl", "start", "hostapd")
 	if !hostapdServiceActive() {
 		log.Printf("HostBerry: hostapd no arrancó tras recuperación del AP del wizard")
 		return false
@@ -90,6 +90,6 @@ func disconnectSTA(interfaceName string) {
 		_, _ = runPrivilegedCommand("wpa_cli", "-i", interfaceName, "-p", socketDir, "save_config")
 		return
 	}
-	_, _ = execPrivilegedOutput("wpa_cli -i " + interfaceName + " -p /run/wpa_supplicant disconnect")
-	_, _ = execPrivilegedOutput("wpa_cli -i " + interfaceName + " -p /run/wpa_supplicant disable_network all")
+	_, _ = execPrivilegedArgv("wpa_cli", "-i", interfaceName, "-p", "/run/wpa_supplicant", "disconnect")
+	_, _ = execPrivilegedArgv("wpa_cli", "-i", interfaceName, "-p", "/run/wpa_supplicant", "disable_network", "all")
 }

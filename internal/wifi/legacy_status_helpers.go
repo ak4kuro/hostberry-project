@@ -1,7 +1,6 @@
 package wifi
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"strings"
@@ -63,21 +62,24 @@ func wpaCliStatus(iface string) ([]byte, error) {
 	if validateInterfaceName(iface) != nil {
 		return nil, exec.ErrNotFound
 	}
-	return utils.ExecCommand(fmt.Sprintf("wpa_cli -i %s status", iface)).CombinedOutput()
+	out, err := utils.ExecuteArgv("wpa_cli", "-i", iface, "status")
+	return []byte(out), err
 }
 
 func iwDevLink(iface string) ([]byte, error) {
 	if validateInterfaceName(iface) != nil {
 		return nil, exec.ErrNotFound
 	}
-	return utils.ExecCommand(fmt.Sprintf("iw dev %s link", iface)).CombinedOutput()
+	out, err := utils.ExecuteArgv("iw", "dev", iface, "link")
+	return []byte(out), err
 }
 
 func iwStationDump(iface string) ([]byte, error) {
 	if validateInterfaceName(iface) != nil {
 		return nil, exec.ErrNotFound
 	}
-	return utils.ExecCommand(fmt.Sprintf("iw dev %s station dump", iface)).CombinedOutput()
+	out, err := utils.ExecuteArgv("iw", "dev", iface, "station", "dump")
+	return []byte(out), err
 }
 
 // ifaceIPv4 delega en utils.IPv4OnInterface (argv, sin shell).
@@ -105,10 +107,11 @@ func startDHCPForIface(iface string) {
 	if validateInterfaceName(iface) != nil {
 		return
 	}
-	if out, err := utils.ExecCommand(fmt.Sprintf("dhclient -v %s", iface)).CombinedOutput(); err == nil || len(out) > 0 {
+	// dhclient -v imprime progreso aunque falle; cualquier salida cuenta como intento.
+	if out, err := utils.ExecuteArgv("dhclient", "-v", iface); err == nil || out != "" {
 		return
 	}
-	_, _ = utils.ExecCommand(fmt.Sprintf("udhcpc -i %s -q -n", iface)).CombinedOutput()
+	_, _ = utils.ExecuteArgv("udhcpc", "-i", iface, "-q", "-n")
 }
 
 func wirelessProcLine(iface string) string {
@@ -167,9 +170,9 @@ func iwconfigOutput(iface string) string {
 	if validateInterfaceName(iface) != nil {
 		return ""
 	}
-	out, err := utils.ExecCommand(fmt.Sprintf("iwconfig %s", iface)).CombinedOutput()
-	if err != nil && len(out) == 0 {
+	out, err := utils.ExecuteArgv("iwconfig", iface)
+	if err != nil && out == "" {
 		return ""
 	}
-	return string(out)
+	return out
 }

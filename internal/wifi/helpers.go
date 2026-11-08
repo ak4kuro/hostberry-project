@@ -88,14 +88,6 @@ func unescapeNMCLIField(s string) string {
 	return strings.ReplaceAll(s, `\\`, `\`)
 }
 
-// shellQuote envuelve un valor para uso seguro en sh -c (evita que $, ;, etc. rompan privileged-exec).
-func shellQuote(s string) string {
-	if s == "" {
-		return "''"
-	}
-	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
-}
-
 // wpaStringNetworkFields son los campos de set_network cuyo valor es una cadena y que
 // wpa_supplicant exige entre comillas dobles literales (p. ej. ssid="MiRed"). Sin esas
 // comillas el valor se interpreta como hex y falla: "failed to parse ssid '...'.".
@@ -107,20 +99,18 @@ var wpaStringNetworkFields = map[string]bool{
 	"password":           true,
 }
 
-// quoteWpaCliSetNetworkValue escapa el valor de set_network (ssid, psk, sae_password, ...).
-// Para campos de tipo cadena añade las comillas dobles que requiere wpa_supplicant ANTES de
-// aplicar el escapado de shell; de lo contrario el shell elimina las comillas y wpa_cli recibe
-// el valor sin comillas, provocando que wpa_supplicant no pueda parsear el SSID/contraseña.
+// quoteWpaCliSetNetworkValue prepara el valor de set_network para argv: los
+// campos de tipo cadena llevan comillas dobles literales (requisito de
+// wpa_supplicant) con el contenido escapado; el resto pasa sin modificar.
+// Al no pasar por shell no hacen falta comillas de quoting.
 func quoteWpaCliSetNetworkValue(args ...string) []string {
 	if len(args) < 4 || args[0] != "set_network" {
 		return args
 	}
 	out := append([]string(nil), args...)
-	value := out[3]
 	if wpaStringNetworkFields[out[2]] {
-		value = `"` + value + `"`
+		out[3] = `"` + wpaConfEscape(out[3]) + `"`
 	}
-	out[3] = shellQuote(value)
 	return out
 }
 
@@ -129,7 +119,7 @@ func readPrivilegedFile(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("ruta vacía")
 	}
-	out, err := runPrivilegedCommand("cat", shellQuote(path))
+	out, err := runPrivilegedCommand("cat", path)
 	if err != nil {
 		return "", err
 	}
@@ -176,18 +166,21 @@ func writeWpaSupplicantConfig(interfaceName, content string) (string, error) {
 	}
 
 	etcPath := wpaConfigPathForInterface(interfaceName)
-	syncCmd := fmt.Sprintf(
-		"mkdir -p %s && cp %s %s && chmod 600 %s",
-		WpaSupplicantConfigDir, runtimePath, etcPath, etcPath,
-	)
-	if out, err := execPrivilegedOutput(syncCmd); err != nil {
+	if out, err := execPrivilegedArgv("mkdir", "-p", WpaSupplicantConfigDir); err != nil {
+		log.Printf("Warning: no se pudo crear %s (%v): %s", WpaSupplicantConfigDir, err, strings.TrimSpace(out))
+	} else if out, err := execPrivilegedArgv("cp", runtimePath, etcPath); err != nil {
 		log.Printf("Warning: wpa_supplicant no sincronizado en %s (%v): %s", etcPath, err, strings.TrimSpace(out))
+	} else if _, err := execPrivilegedArgv("chmod", "600", etcPath); err != nil {
+		log.Printf("Warning: chmod %s: %v", etcPath, err)
 	}
 
 	alt := filepath.Join(WpaSupplicantAltConfigDir, fmt.Sprintf("wpa_supplicant-%s.conf", interfaceName))
-	altCmd := fmt.Sprintf("mkdir -p %s && cp %s %s && chmod 644 %s", WpaSupplicantAltConfigDir, runtimePath, alt, alt)
-	if _, err := execPrivilegedOutput(altCmd); err != nil {
+	if _, err := execPrivilegedArgv("mkdir", "-p", WpaSupplicantAltConfigDir); err != nil {
 		log.Printf("Warning: copia auxiliar wpa_supplicant en %s: %v", alt, err)
+	} else if _, err := execPrivilegedArgv("cp", runtimePath, alt); err != nil {
+		log.Printf("Warning: copia auxiliar wpa_supplicant en %s: %v", alt, err)
+	} else if _, err := execPrivilegedArgv("chmod", "644", alt); err != nil {
+		log.Printf("Warning: chmod %s: %v", alt, err)
 	}
 
 	return runtimePath, nil
@@ -349,8 +342,11 @@ func writeHostapdChannelMode(channel int, hwMode string) error {
 	if err := os.WriteFile(tmpPath, []byte(updated), 0600); err != nil {
 		return err
 	}
-	_, err = execPrivilegedOutput(fmt.Sprintf("cp %s %s && chmod 644 %s && cp %s /opt/hostberry/data/hostapd-active.conf && chmod 644 /opt/hostberry/data/hostapd-active.conf", tmpPath, hostapdConfigPath, hostapdConfigPath, tmpPath))
-	return err
+	_, _ = execPrivilegedArgv("cp", tmpPath, hostapdConfigPath)
+	_, _ = execPrivilegedArgv("chmod", "644", hostapdConfigPath)
+	_, _ = execPrivilegedArgv("cp", tmpPath, "/opt/hostberry/data/hostapd-active.conf")
+	_, _ = execPrivilegedArgv("chmod", "644", "/opt/hostberry/data/hostapd-active.conf")
+	return nil
 }
 
 func detectSSIDSecurityFromWpaCli(interfaceName, ssid string) string {
@@ -410,27 +406,27 @@ func stopWpaSupplicant(interfaceName string) {
 	}
 	i18n.LogTf("logs.wpa_stopping", interfaceName)
 
-	_, _ = execPrivilegedOutput("systemctl stop wpa_supplicant")
-	_, _ = execPrivilegedOutput(fmt.Sprintf("pkill -f wpa_supplicant.*-i.*%s", interfaceName))
-	_, _ = execPrivilegedOutput(fmt.Sprintf("pkill -f wpa_supplicant.*%s", interfaceName))
-	_, _ = execPrivilegedOutput("killall wpa_supplicant")
+	_, _ = execPrivilegedArgv("systemctl", "stop", "wpa_supplicant")
+	_, _ = execPrivilegedArgv("pkill", "-f", "wpa_supplicant.*-i.*"+interfaceName)
+	_, _ = execPrivilegedArgv("pkill", "-f", "wpa_supplicant.*"+interfaceName)
+	_, _ = execPrivilegedArgv("killall", "wpa_supplicant")
 
 	for i := 0; i < 5; i++ {
-		checkCmd := exec.Command("pgrep", "-f", fmt.Sprintf("wpa_supplicant.*%s", interfaceName))
+		checkCmd := exec.Command("pgrep", "-f", "wpa_supplicant.*"+interfaceName)
 		if out, _ := checkCmd.Output(); strings.TrimSpace(string(out)) == "" {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 		if i == 4 {
 			i18n.LogT("logs.wpa_force_kill")
-			_, _ = execPrivilegedOutput(fmt.Sprintf("pkill -9 -f wpa_supplicant.*%s", interfaceName))
-			_, _ = execPrivilegedOutput("killall -9 wpa_supplicant")
+			_, _ = execPrivilegedArgv("pkill", "-9", "-f", "wpa_supplicant.*"+interfaceName)
+			_, _ = execPrivilegedArgv("killall", "-9", "wpa_supplicant")
 		}
 	}
 
 	for _, dir := range WpaSocketDirs {
-		_, _ = execPrivilegedOutput(fmt.Sprintf("rm -f %s/%s", dir, interfaceName))
-		_, _ = execPrivilegedOutput(fmt.Sprintf("rm -f %s/%s", dir, "p2p-dev-"+interfaceName))
+		_, _ = execPrivilegedArgv("rm", "-f", dir+"/"+interfaceName)
+		_, _ = execPrivilegedArgv("rm", "-f", dir+"/p2p-dev-"+interfaceName)
 	}
 }
 
@@ -456,10 +452,10 @@ func findWorkingWpaSupplicantSocket(interfaceName string) string {
 }
 
 func requestInterfaceDHCP(interfaceName string) {
-	_, _ = execPrivilegedOutput(fmt.Sprintf("pkill -f dhclient.*%s", interfaceName))
-	_, _ = execPrivilegedOutput(fmt.Sprintf("pkill -f udhcpc.*%s", interfaceName))
-	if _, err := execPrivilegedOutput(fmt.Sprintf("dhclient -v %s", interfaceName)); err != nil {
-		_, _ = execPrivilegedOutput(fmt.Sprintf("udhcpc -i %s -q -n", interfaceName))
+	_, _ = execPrivilegedArgv("pkill", "-f", "dhclient.*"+interfaceName)
+	_, _ = execPrivilegedArgv("pkill", "-f", "udhcpc.*"+interfaceName)
+	if _, err := execPrivilegedArgv("dhclient", "-v", interfaceName); err != nil {
+		_, _ = execPrivilegedArgv("udhcpc", "-i", interfaceName, "-q", "-n")
 	}
 }
 
@@ -484,7 +480,7 @@ func clearLeftoverWiFiNetworks(interfaceName, socketDir string) {
 // dejando intactas las conexiones por cable (Ethernet). Solo se usa para limpiar restos antes de
 // que el asistente conecte a la red elegida por el usuario.
 func removeStaleNMWiFiConnections() {
-	out, err := execPrivilegedOutputTimeout("nmcli -t -f UUID,TYPE connection show", 5*time.Second)
+	out, err := execPrivilegedArgvTimeout([]string{"nmcli", "-t", "-f", "UUID,TYPE", "connection", "show"}, 5*time.Second)
 	if err != nil || strings.TrimSpace(out) == "" {
 		return
 	}
@@ -502,7 +498,7 @@ func removeStaleNMWiFiConnections() {
 		if uuid == "" || !strings.Contains(connType, "wireless") {
 			continue
 		}
-		_, _ = execPrivilegedOutputTimeout("nmcli connection delete uuid "+uuid, 5*time.Second)
+		_, _ = execPrivilegedArgvTimeout([]string{"nmcli", "connection", "delete", "uuid", uuid}, 5*time.Second)
 	}
 }
 
@@ -519,7 +515,7 @@ func connectWiFiViaWpaCli(socketDir, interfaceName, ssid, password, securityType
 	// asociar en cualquier canal (incluido DFS, donde la STA actúa solo como cliente). Tras
 	// conectar realineamos y volvemos a levantar el AP en un canal válido (nunca DFS).
 	if apWasActive {
-		_, _ = execPrivilegedOutput("systemctl stop hostapd")
+		_, _ = execPrivilegedArgv("systemctl", "stop", "hostapd")
 		time.Sleep(700 * time.Millisecond)
 	}
 	defer func() {
@@ -672,7 +668,7 @@ func wifiAuthFailureDetected(interfaceName, statusOut string) bool {
 	if strings.Contains(statusOut, "AUTH_FAILED") || strings.Contains(statusOut, "WRONG_KEY") {
 		return true
 	}
-	out, err := execPrivilegedOutputTimeout("journalctl -u wpa_supplicant --since '-40 seconds' --no-pager", 4*time.Second)
+	out, err := execPrivilegedArgvTimeout([]string{"journalctl", "-u", "wpa_supplicant", "--since", "-40 seconds", "--no-pager"}, 4*time.Second)
 	if err != nil || out == "" {
 		return false
 	}

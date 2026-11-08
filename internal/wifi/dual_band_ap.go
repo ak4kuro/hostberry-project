@@ -245,20 +245,26 @@ func writePrivilegedHostapdConfig(path, content string) error {
 			return err
 		}
 	}
-	_, err := execPrivilegedOutput(fmt.Sprintf("cp %s %s && chmod 644 %s", dataPath, path, path))
+	if _, err := execPrivilegedArgv("cp", dataPath, path); err != nil {
+		return err
+	}
+	_, err := execPrivilegedArgv("chmod", "644", path)
 	return err
 }
 
 func ensureVirtualAP(phyName, iface string) error {
 	if _, err := os.Stat(filepath.Join("/sys/class/net", iface)); err == nil {
-		_, _ = execPrivilegedOutputTimeout(fmt.Sprintf("ip link set %s up", iface), 2*time.Second)
+		_, _ = execPrivilegedArgvTimeout([]string{"ip", "link", "set", iface, "up"}, 2*time.Second)
 		return nil
 	}
-	cmd := fmt.Sprintf("iw phy %s interface add %s type __ap && ip link set %s up", phyName, iface, iface)
-	if _, err := execPrivilegedOutputTimeout(cmd, 8*time.Second); err != nil {
+	if _, err := execPrivilegedArgvTimeout([]string{"iw", "phy", phyName, "interface", "add", iface, "type", "__ap"}, 8*time.Second); err != nil {
 		return err
 	}
-	_, _ = execPrivilegedOutputTimeout(fmt.Sprintf("ip addr add 192.168.4.1/24 dev %s 2>/dev/null || ip addr replace 192.168.4.1/24 dev %s", iface, iface), 3*time.Second)
+	if _, err := execPrivilegedArgvTimeout([]string{"ip", "link", "set", iface, "up"}, 3*time.Second); err != nil {
+		log.Printf("dual_band_ap: ip link set %s up: %v", iface, err)
+	}
+	// `ip addr add` falla si la dirección ya existe; `replace` cubre ambos casos.
+	_, _ = execPrivilegedArgvTimeout([]string{"ip", "addr", "replace", "192.168.4.1/24", "dev", iface}, 3*time.Second)
 	return nil
 }
 
