@@ -3,116 +3,15 @@ package wifi
 import (
 	"fmt"
 	"log"
-	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"hostberry/internal/constants"
 	"hostberry/internal/database"
 	middleware "hostberry/internal/middleware"
-	"hostberry/internal/models"
 )
 
-func WifiLegacyStoredNetworksHandler(c *fiber.Ctx) error {
-	var networks []fiber.Map
-	var lastConnected []string
-
-	interfaceName := DetectWiFiInterface()
-	if err := validateInterfaceName(interfaceName); err != nil {
-		interfaceName = constants.DefaultWiFiInterface
-	}
-
-	listOut, err := exec.Command("sudo", "wpa_cli", "-i", interfaceName, "list_networks").CombinedOutput()
-	if err != nil {
-		// Fallback por si se ejecuta como root o sin sudo.
-		listOut, err = exec.Command("wpa_cli", "-i", interfaceName, "list_networks").CombinedOutput()
-	}
-
-	if err == nil && len(listOut) > 0 {
-		lines := strings.Split(string(listOut), "\n")
-		for i, line := range lines {
-			if i == 0 || strings.TrimSpace(line) == "" {
-				continue // Saltar encabezado y líneas vacías
-			}
-
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				networkID := fields[0]
-				ssid := fields[1]
-
-				if ssid != "" && ssid != "--" {
-					ssid = strings.Trim(ssid, "\"")
-
-					network := fiber.Map{
-						"id":     networkID,
-						"ssid":   ssid,
-						"status": "saved",
-					}
-
-					// networkID esperado numérico (wpa_cli ids).
-					if _, convErr := strconv.Atoi(networkID); convErr == nil {
-						enabledOut, _ := exec.Command("sudo", "wpa_cli", "-i", interfaceName, "get_network", networkID, "disabled").CombinedOutput()
-						if len(enabledOut) == 0 {
-							enabledOut, _ = exec.Command("wpa_cli", "-i", interfaceName, "get_network", networkID, "disabled").CombinedOutput()
-						}
-						if strings.TrimSpace(string(enabledOut)) == "0" {
-							network["enabled"] = true
-							lastConnected = append(lastConnected, ssid)
-						} else {
-							network["enabled"] = false
-						}
-					}
-
-					networks = append(networks, network)
-				}
-			}
-		}
-	}
-
-	return c.JSON(fiber.Map{
-		"success":        true,
-		"networks":       networks,
-		"last_connected": lastConnected,
-	})
-}
-
-func WifiLegacyAutoconnectHandler(c *fiber.Ctx) error {
-	return c.JSON(fiber.Map{"success": false})
-}
-
-func WifiLegacyScanHandler(c *fiber.Ctx) error {
-	userInterface := c.Locals("user")
-	if userInterface == nil {
-		log.Printf("ERROR: Usuario no encontrado en wifiLegacyScanHandler")
-		return c.Status(401).JSON(fiber.Map{
-			"success": false,
-			"error":   "No autenticado. Por favor, inicia sesión nuevamente.",
-		})
-	}
-
-	user, ok := userInterface.(*models.User)
-	if !ok || user == nil {
-		log.Printf("ERROR: Usuario inválido en wifiLegacyScanHandler")
-		return c.Status(401).JSON(fiber.Map{
-			"success": false,
-			"error":   "Usuario no encontrado. Por favor, inicia sesión nuevamente.",
-		})
-	}
-
-	interfaceName := c.Query("interface", constants.DefaultWiFiInterface)
-	if err := validateInterfaceName(interfaceName); err != nil {
-		return c.Status(400).JSON(fiber.Map{"success": false, "error": "Nombre de interfaz inválido"})
-	}
-	result := ScanWiFiNetworks(interfaceName, true)
-	if networks, ok := result["networks"]; ok {
-		return c.JSON(fiber.Map{"success": true, "networks": networks})
-	}
-	return c.JSON(fiber.Map{"success": true, "networks": []fiber.Map{}})
-}
-
-func WifiLegacyDisconnectHandler(c *fiber.Ctx) error {
+func WifiDisconnectHandler(c *fiber.Ctx) error {
 	// Para el setup wizard puede que no haya sesión/token.
 	// Permitir desconectar sin auth: la lógica seguirá funcionando y omitimos logs.
 	username := "setup_wizard"

@@ -23,10 +23,86 @@ func VpnConnectionsHandler(c *fiber.Ctx) error {
 	return c.JSON(conns)
 }
 
-func VpnServersHandler(c *fiber.Ctx) error { return c.JSON([]fiber.Map{}) }
-func VpnClientsHandler(c *fiber.Ctx) error { return c.JSON([]fiber.Map{}) }
+// VpnServersHandler lista los servidores VPN configurados (remote OpenVPN y
+// endpoints WireGuard) con su estado actual.
+func VpnServersHandler(c *fiber.Ctx) error {
+	var servers []fiber.Map
+
+	if remote := openvpnRemote(); remote != "" {
+		status := "stopped"
+		if getOpenVPNServiceStatus() == "active" {
+			status = "running"
+		}
+		servers = append(servers, fiber.Map{
+			"name":         "openvpn",
+			"address":      remote,
+			"status":       status,
+			"clients_count": 0,
+		})
+	}
+
+	for _, ep := range wgEndpoints() {
+		servers = append(servers, fiber.Map{
+			"name":         "wireguard",
+			"address":      ep,
+			"status":       "running",
+			"clients_count": 0,
+		})
+	}
+
+	if servers == nil {
+		servers = []fiber.Map{}
+	}
+	return c.JSON(servers)
+}
+
+// VpnClientsHandler muestra la sesión VPN del propio dispositivo: nombre del
+// túnel, IP asignada y estado de conexión.
+func VpnClientsHandler(c *fiber.Ctx) error {
+	var clients []fiber.Map
+
+	if getOpenVPNServiceStatus() == "active" {
+		clients = append(clients, fiber.Map{
+			"name":      "openvpn",
+			"address":   ifaceIPv4("tun0"),
+			"connected": true,
+			"bandwidth": "-",
+		})
+	}
+
+	for _, iface := range wgInterfaces() {
+		clients = append(clients, fiber.Map{
+			"name":      iface,
+			"address":   ifaceIPv4(iface),
+			"connected": true,
+			"bandwidth": "-",
+		})
+	}
+
+	if clients == nil {
+		clients = []fiber.Map{}
+	}
+	return c.JSON(clients)
+}
+
+// VpnToggleHandler conmuta el VPN activo (OpenVPN si está activo; si no, WireGuard).
 func VpnToggleHandler(c *fiber.Ctx) error {
-	return c.Status(501).JSON(fiber.Map{"error": "VPN toggle no implementado"})
+	status := GetVPNStatus()
+	name := "openvpn"
+	if ovpn, ok := status["openvpn"].(map[string]interface{}); ok {
+		if active, _ := ovpn["active"].(bool); active {
+			name = "openvpn"
+		} else if wg, ok := status["wireguard"].(map[string]interface{}); ok {
+			if active, _ := wg["active"].(bool); active {
+				name = "wireguard"
+			}
+		}
+	}
+	result, err := ToggleVPNByName(name)
+	if err != nil {
+		return c.Status(500).JSON(fiber.Map{"success": false, "error": err.Error()})
+	}
+	return c.JSON(result)
 }
 func VpnGetConfigHandler(c *fiber.Ctx) error {
 	result := GetOpenVPNConfig()
@@ -54,7 +130,12 @@ func VpnConfigHandler(c *fiber.Ctx) error {
 	return c.Status(500).JSON(fiber.Map{"error": "Error desconocido"})
 }
 func VpnConnectionToggleHandler(c *fiber.Ctx) error {
-	return c.Status(501).JSON(fiber.Map{"error": "VPN connection toggle no implementado"})
+	name := c.Params("name")
+	result, err := ToggleVPNByName(name)
+	if err != nil {
+		return c.Status(400).JSON(fiber.Map{"success": false, "error": err.Error()})
+	}
+	return c.JSON(result)
 }
 func VpnCertificatesGenerateHandler(c *fiber.Ctx) error {
 	return c.Status(501).JSON(fiber.Map{"error": "VPN certificates no implementado"})

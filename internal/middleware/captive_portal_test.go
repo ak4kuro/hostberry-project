@@ -6,6 +6,7 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/valyala/fasthttp"
+	"hostberry/internal/captiveportal"
 	"hostberry/internal/constants"
 )
 
@@ -75,10 +76,10 @@ func TestCaptivePortalMiddlewareAllowsLocalHost(t *testing.T) {
 }
 
 func TestIsAPCaptiveClientIP(t *testing.T) {
-	if !isAPCaptiveClientIP("192.168.4.50") {
+	if !captiveportal.IsAPClientIP("192.168.4.50") {
 		t.Fatal("expected AP client IP")
 	}
-	if isAPCaptiveClientIP("192.168.1.50") {
+	if captiveportal.IsAPClientIP("192.168.1.50") {
 		t.Fatal("expected LAN client IP to be excluded")
 	}
 }

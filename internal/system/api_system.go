@@ -19,7 +19,7 @@ func strconvAtoiSafe(s string) (int, error) {
 	return utils.StrconvAtoiSafe(s)
 }
 
-func systemActivityHandler(c *fiber.Ctx) error {
+func SystemActivityHandler(c *fiber.Ctx) error {
 	limitStr := c.Query("limit", "10")
 	limit := 10
 	if v, err := strconvAtoiSafe(limitStr); err == nil && v > 0 && v <= 100 {
@@ -42,10 +42,6 @@ func systemActivityHandler(c *fiber.Ctx) error {
 	}
 
 	return c.JSON(activities)
-}
-
-func SystemActivityHandler(c *fiber.Ctx) error {
-	return systemActivityHandler(c)
 }
 
 func SystemNetworkHandler(c *fiber.Ctx) error {

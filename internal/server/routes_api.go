@@ -79,9 +79,7 @@ func setupApiRoutes(app *fiber.App) {
 			wifi.Post("/scan", wifiHandlers.WifiScanHandler)
 			wifi.Get("/interfaces", wifiHandlers.WifiInterfacesHandler)
 			wifi.Post("/connect", middleware.RequireAdmin, middleware.SensitiveActionRateLimit("wifi_connect"), middleware.MutationLock("radio", 120*time.Second), wifiHandlers.WifiConnectHandler)
-			wifi.Post("/disconnect", middleware.RequireAdmin, middleware.SensitiveActionRateLimit("wifi_disconnect"), middleware.MutationLock("radio", 30*time.Second), wifiHandlers.WifiLegacyDisconnectHandler)
-			wifi.Get("/networks", wifiHandlers.WifiNetworksHandler)
-			wifi.Get("/clients", wifiHandlers.WifiClientsHandler)
+			wifi.Post("/disconnect", middleware.RequireAdmin, middleware.SensitiveActionRateLimit("wifi_disconnect"), middleware.MutationLock("radio", 30*time.Second), wifiHandlers.WifiDisconnectHandler)
 			wifi.Post("/toggle", middleware.RequireAdmin, middleware.MutationLock("radio", 10*time.Second), wifiHandlers.WifiToggleHandler)
 			wifi.Post("/unblock", middleware.RequireAdmin, middleware.MutationLock("radio", 10*time.Second), wifiHandlers.WifiUnblockHandler)
 			wifi.Post("/software-switch", middleware.RequireAdmin, middleware.MutationLock("radio", 10*time.Second), wifiHandlers.WifiSoftwareSwitchHandler)
@@ -140,14 +138,14 @@ func setupApiRoutes(app *fiber.App) {
 		adblock := api.Group("/adblock", middleware.RequireAuth)
 		{
 			adblock.Get("/status", adblockHandlers.AdblockStatusHandler)
-			adblock.Get("/lists", sys.AdblockListsHandler)
-			adblock.Get("/domains", sys.AdblockDomainsHandler)
+			adblock.Get("/lists", adblockHandlers.AdblockListsHandler)
+			adblock.Get("/domains", adblockHandlers.AdblockDomainsHandler)
 			adblock.Post("/enable", middleware.RequireAdmin, adblockHandlers.AdblockEnableHandler)
 			adblock.Post("/disable", middleware.RequireAdmin, adblockHandlers.AdblockDisableHandler)
-			adblock.Post("/update", middleware.RequireAdmin, sys.AdblockUpdateHandler)
-			adblock.Post("/lists/:name/toggle", middleware.RequireAdmin, sys.AdblockToggleListHandler)
-			adblock.Post("/domains/:name/toggle", middleware.RequireAdmin, sys.AdblockToggleDomainHandler)
-			adblock.Post("/config", middleware.RequireAdmin, sys.AdblockConfigHandler)
+			adblock.Post("/update", middleware.RequireAdmin, adblockHandlers.AdblockUpdateHandler)
+			adblock.Post("/lists/:name/toggle", middleware.RequireAdmin, adblockHandlers.AdblockToggleListHandler)
+			adblock.Post("/domains/:name/toggle", middleware.RequireAdmin, adblockHandlers.AdblockToggleDomainHandler)
+			adblock.Post("/config", middleware.RequireAdmin, adblockHandlers.AdblockConfigHandler)
 
 			dnscrypt := adblock.Group("/dnscrypt")
 			{
@@ -181,11 +179,9 @@ func setupApiRoutes(app *fiber.App) {
 		}
 	}
 
-	// Legacy WiFi endpoints bajo /api/wifi
+	// Legacy WiFi endpoint: solo se mantiene /disconnect porque el frontend
+	// aún lo usa como fallback. El resto de rutas /api/wifi/* fueron eliminadas
+	// (equivalentes en /api/v1/wifi/*).
 	wifiLegacy := app.Group("/api/wifi", middleware.RequireAuth)
-	wifiLegacy.Get("/status", wifiHandlers.WifiLegacyStatusHandler)
-	wifiLegacy.Get("/stored_networks", wifiHandlers.WifiLegacyStoredNetworksHandler)
-	wifiLegacy.Get("/autoconnect", wifiHandlers.WifiLegacyAutoconnectHandler)
-	wifiLegacy.Get("/scan", wifiHandlers.WifiLegacyScanHandler)
-	wifiLegacy.Post("/disconnect", middleware.RequireAdmin, middleware.SensitiveActionRateLimit("wifi_disconnect"), middleware.MutationLock("radio", 10*time.Second), wifiHandlers.WifiLegacyDisconnectHandler)
+	wifiLegacy.Post("/disconnect", middleware.RequireAdmin, middleware.SensitiveActionRateLimit("wifi_disconnect"), middleware.MutationLock("radio", 10*time.Second), wifiHandlers.WifiDisconnectHandler)
 }

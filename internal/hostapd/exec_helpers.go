@@ -3,7 +3,6 @@ package hostapd
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -69,14 +68,6 @@ func readIfaceSysFile(iface string, parts ...string) ([]byte, error) {
 		return nil, errors.New("invalid sysfs path")
 	}
 	return os.ReadFile(p)
-}
-
-func readIfaceAddress(iface string) (string, error) {
-	b, err := readIfaceSysFile(iface, "address")
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(b)), nil
 }
 
 func readPhyNameFromSys(iface string) (string, error) {
@@ -171,28 +162,6 @@ func hostapdCliCountStations(iface string) int {
 	return n
 }
 
-func journalctlHostapd(n int) string {
-	ctx, cancel := context.WithTimeout(context.Background(), hostapdCmdTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "sudo", "journalctl", "-u", "hostapd", "-n", fmt.Sprintf("%d", n), "--no-pager")
-	cmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-	out, _ := cmd.CombinedOutput()
-	return string(out)
-}
-
-func systemctlStatusHostapd(head int) string {
-	ctx, cancel := context.WithTimeout(context.Background(), hostapdCmdTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "sudo", "systemctl", "status", "hostapd", "--no-pager")
-	cmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-	out, _ := cmd.CombinedOutput()
-	lines := strings.Split(string(out), "\n")
-	if len(lines) > head {
-		lines = lines[:head]
-	}
-	return strings.Join(lines, "\n")
-}
-
 func systemctlIsEnabled(unit string) string {
 	out, _ := exec.Command("systemctl", "is-enabled", unit).CombinedOutput()
 	return strings.TrimSpace(string(out))
@@ -203,76 +172,6 @@ func ipLinkShow(iface string) (string, error) {
 		return "", errors.New("invalid interface")
 	}
 	return runIP("link", "show", iface)
-}
-
-func ipLinkSetUp(iface string) {
-	if validators.ValidateIfaceName(iface) != nil {
-		return
-	}
-	_, _ = runIP("link", "set", iface, "up")
-}
-
-func iwPhyAddAP(phy, apIface string) (string, error) {
-	if !validatePhyName(phy) || validators.ValidateIfaceName(apIface) != nil {
-		return "", errors.New("invalid phy or ap interface")
-	}
-	return runIw("phy", phy, "interface", "add", apIface, "type", "__ap")
-}
-
-func iwDevAddAP(dev, apIface string) (string, error) {
-	if validators.ValidateIfaceName(dev) != nil || validators.ValidateIfaceName(apIface) != nil {
-		return "", errors.New("invalid interface")
-	}
-	return runIw("dev", dev, "interface", "add", apIface, "type", "__ap")
-}
-
-func iwDevDel(iface string) {
-	if validators.ValidateIfaceName(iface) != nil {
-		return
-	}
-	_, _ = runIw("dev", iface, "del")
-}
-
-func iwDevSetTypeManaged(iface string) {
-	if validators.ValidateIfaceName(iface) != nil {
-		return
-	}
-	_, _ = runIw("dev", iface, "set", "type", "managed")
-}
-
-func ipAddrIPv4OnIface(iface string) string {
-	if validators.ValidateIfaceName(iface) != nil {
-		return ""
-	}
-	out, err := runIP("addr", "show", iface)
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "inet ") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				addr := strings.Split(fields[1], "/")[0]
-				if addr != "" {
-					return addr
-				}
-			}
-		}
-	}
-	return ""
-}
-
-func ipAddrAddOrReplace24(ip, iface string) (string, error) {
-	if validators.ValidateIP(ip) != nil || validators.ValidateIfaceName(iface) != nil {
-		return "", errors.New("invalid ip or interface")
-	}
-	cidr := ip + "/24"
-	out, err := runIP("addr", "add", cidr, "dev", iface)
-	if err == nil {
-		return out, nil
-	}
-	return runIP("addr", "replace", cidr, "dev", iface)
 }
 
 // ifaceFromHostapdConf lee interface= de hostapd.conf con validación.
@@ -317,37 +216,4 @@ func resolvePhyName(phyInterface string) string {
 		return w
 	}
 	return "phy0"
-}
-
-func netIfaceExists(iface string) bool {
-	if validators.ValidateIfaceName(iface) != nil {
-		return false
-	}
-	_, err := os.Stat(filepath.Join("/sys/class/net", iface))
-	return err == nil
-}
-
-// firstWlanIfaceFromIP elige la primera interfaz cuyo nombre empieza por «wlan» desde `ip link`.
-func firstWlanIfaceFromIP() string {
-	out, err := runIP("link", "show")
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		idx := strings.Index(line, ":")
-		if idx < 0 {
-			continue
-		}
-		rest := line[idx+1:]
-		idx2 := strings.Index(rest, ":")
-		if idx2 < 0 {
-			continue
-		}
-		name := strings.TrimSpace(rest[:idx2])
-		if strings.HasPrefix(name, "wlan") && validators.ValidateIfaceName(name) == nil {
-			return name
-		}
-	}
-	return ""
 }

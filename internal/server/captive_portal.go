@@ -1,9 +1,6 @@
 package server
 
 import (
-	"net"
-	"strings"
-
 	"github.com/gofiber/fiber/v2"
 	"hostberry/internal/auth"
 	"hostberry/internal/captiveportal"
@@ -12,25 +9,9 @@ import (
 	"hostberry/internal/models"
 )
 
-func captivePortalNetwork() *net.IPNet {
-	_, n, err := net.ParseCIDR(constants.DefaultAPNetworkCIDR)
-	if err != nil {
-		return nil
-	}
-	return n
-}
-
 // IsCaptivePortalClient indica si la petición viene de un cliente en la red AP (ap0).
 func IsCaptivePortalClient(c *fiber.Ctx) bool {
-	apNet := captivePortalNetwork()
-	if apNet == nil {
-		return false
-	}
-	ip := net.ParseIP(strings.TrimSpace(c.IP()))
-	if ip == nil {
-		return false
-	}
-	return apNet.Contains(ip)
+	return captiveportal.IsAPClientIP(c.IP())
 }
 
 func captivePortalHTMLRedirect() string {

@@ -1,10 +1,12 @@
 package vpn
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"hostberry/internal/i18n"
 	"hostberry/internal/utils"
@@ -278,6 +280,136 @@ func configureWireGuard(config, user string) map[string]interface{} {
 	return result
 }
 
+func vpnCmdTimeout() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 90*time.Second)
+}
+
+// toggleOpenVPNService arranca o detiene el servicio OpenVPN cliente según su estado actual.
+func toggleOpenVPNService() (started bool, output string, err error) {
+	active := getOpenVPNServiceStatus() == "active"
+	action := "start"
+	if active {
+		action = "stop"
+	}
+	ctx, cancel := vpnCmdTimeout()
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sudo", "systemctl", action, "openvpn@client")
+	out, err := cmd.CombinedOutput()
+	return !active, strings.TrimSpace(string(out)), err
+}
+
+// toggleWireGuardService levanta o baja un interfaz WireGuard (wg-quick).
+func toggleWireGuardService(iface string) (started bool, output string, err error) {
+	if validators.ValidateIfaceName(iface) != nil {
+		return false, "", fmt.Errorf("invalid interface name")
+	}
+	active := false
+	if out, e := wgShow("show", iface); e == nil && out != "" {
+		active = true
+	}
+	action := "up"
+	if active {
+		action = "down"
+	}
+	ctx, cancel := vpnCmdTimeout()
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sudo", "wg-quick", action, iface)
+	out, err := cmd.CombinedOutput()
+	return !active, strings.TrimSpace(string(out)), err
+}
+
+// toggleVPNByName conmuta el servicio VPN indicado ("openvpn", "wireguard" o "wg0").
+func toggleVPNByName(name string) (map[string]interface{}, error) {
+	name = strings.ToLower(strings.TrimSpace(name))
+	switch name {
+	case "openvpn":
+		started, out, err := toggleOpenVPNService()
+		if err != nil {
+			return nil, fmt.Errorf("%v: %s", err, out)
+		}
+		if started {
+			return map[string]interface{}{"success": true, "message": "OpenVPN iniciado", "output": out}, nil
+		}
+		return map[string]interface{}{"success": true, "message": "OpenVPN detenido", "output": out}, nil
+	case "wireguard", "wg0":
+		started, out, err := toggleWireGuardService("wg0")
+		if err != nil {
+			return nil, fmt.Errorf("%v: %s", err, out)
+		}
+		if started {
+			return map[string]interface{}{"success": true, "message": "WireGuard activado", "output": out}, nil
+		}
+		return map[string]interface{}{"success": true, "message": "WireGuard desactivado", "output": out}, nil
+	default:
+		return nil, fmt.Errorf("tipo de VPN no soportado: %s", name)
+	}
+}
+
+// openvpnRemote devuelve el host del "remote" de la configuración OpenVPN cliente.
+func openvpnRemote() string {
+	b, err := os.ReadFile(openvpnClientConfigPath)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == "remote" {
+			return fields[1]
+		}
+	}
+	return ""
+}
+
+// wgEndpoints devuelve los endpoints (host:puerto) configurados en los túneles WireGuard activos.
+func wgEndpoints() []string {
+	var endpoints []string
+	for _, iface := range wgInterfaces() {
+		out, err := wgShow("show", iface, "endpoints")
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(out, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				endpoints = append(endpoints, fields[1])
+			}
+		}
+	}
+	return endpoints
+}
+
+// ifaceIPv4 devuelve la primera dirección IPv4 de una interfaz.
+func ifaceIPv4(iface string) string {
+	if validators.ValidateIfaceName(iface) != nil {
+		return ""
+	}
+	ctx, cancel := vpnCmdTimeout()
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ip", "-o", "-4", "addr", "show", iface)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		idx := strings.Index(line, "inet ")
+		if idx < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(line[idx+5:])
+		if i := strings.Index(rest, "/"); i >= 0 {
+			rest = rest[:i]
+		}
+		if ip := strings.TrimSpace(rest); ip != "" {
+			return ip
+		}
+	}
+	return ""
+}
+
 // ---- wrappers exportados ----
 
 func GetOpenVPNConfig() map[string]interface{} { return getOpenVPNConfig() }
@@ -294,4 +426,7 @@ func ConnectVPN(config, vpnType, user string) map[string]interface{} {
 func GetWireGuardStatus() map[string]interface{} { return getWireGuardStatus() }
 func ConfigureWireGuard(config, user string) map[string]interface{} {
 	return configureWireGuard(config, user)
+}
+func ToggleVPNByName(name string) (map[string]interface{}, error) {
+	return toggleVPNByName(name)
 }

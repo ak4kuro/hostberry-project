@@ -9,26 +9,6 @@ import (
 	"hostberry/internal/constants"
 )
 
-func apClientNetwork() *net.IPNet {
-	_, n, err := net.ParseCIDR(constants.DefaultAPNetworkCIDR)
-	if err != nil {
-		return nil
-	}
-	return n
-}
-
-func isAPCaptiveClientIP(ipStr string) bool {
-	apNet := apClientNetwork()
-	if apNet == nil {
-		return false
-	}
-	ip := net.ParseIP(strings.TrimSpace(ipStr))
-	if ip == nil {
-		return false
-	}
-	return apNet.Contains(ip)
-}
-
 func isLocalCaptiveHost(host string) bool {
 	host = strings.ToLower(strings.TrimSpace(host))
 	if host == "" {
@@ -43,7 +23,7 @@ func isLocalCaptiveHost(host string) bool {
 		return true
 	}
 	if ip := net.ParseIP(hostOnly); ip != nil {
-		if apNet := apClientNetwork(); apNet != nil && apNet.Contains(ip) {
+		if apNet := captiveportal.APClientNetwork(); apNet != nil && apNet.Contains(ip) {
 			return true
 		}
 	}
@@ -65,7 +45,7 @@ func captivePortalAllowedPath(path string) bool {
 
 // HostBerryLocalMiddleware en la red AP envía hostberry.local al asistente de configuración.
 func HostBerryLocalMiddleware(c *fiber.Ctx) error {
-	if !isAPCaptiveClientIP(c.IP()) {
+	if !captiveportal.IsAPClientIP(c.IP()) {
 		return c.Next()
 	}
 	hostOnly := strings.ToLower(strings.TrimSpace(c.Hostname()))
@@ -85,7 +65,7 @@ func HostBerryLocalMiddleware(c *fiber.Ctx) error {
 // CaptivePortalMiddleware redirige al login de HostBerry las peticiones de clientes
 // en la red AP (192.168.4.0/24) cuyo Host es externo (p. ej. google.es tras DNS del portal).
 func CaptivePortalMiddleware(c *fiber.Ctx) error {
-	if !isAPCaptiveClientIP(c.IP()) {
+	if !captiveportal.IsAPClientIP(c.IP()) {
 		return c.Next()
 	}
 	path := c.Path()

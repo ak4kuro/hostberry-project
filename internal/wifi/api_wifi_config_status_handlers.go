@@ -9,12 +9,15 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"hostberry/internal/constants"
 	"hostberry/internal/database"
 	middleware "hostberry/internal/middleware"
 	"hostberry/internal/validators"
 )
 
+// WifiConfigHandler gestiona únicamente el cambio de región WiFi (iw reg set).
+// La conexión WiFi se realiza por /api/v1/wifi/connect (WifiConnectHandler),
+// que tiene validación y logging completos; la antigua rama SSID de este
+// endpoint era un duplicado con validación más débil y se eliminó.
 func WifiConfigHandler(c *fiber.Ctx) error {
 	user, ok := middleware.GetUser(c)
 	if !ok {
@@ -23,16 +26,21 @@ func WifiConfigHandler(c *fiber.Ctx) error {
 	userID := user.ID
 
 	var req struct {
-		SSID     string `json:"ssid"`
-		Password string `json:"password"`
-		Security string `json:"security"`
-		Region   string `json:"region"`
+		Region string `json:"region"`
 	}
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"error": "Datos inválidos"})
 	}
 
-	if req.Region != "" {
+	if req.Region == "" {
+		return c.Status(400).JSON(fiber.Map{"error": "Se requiere region"})
+	}
+	req.Region = strings.ToUpper(strings.TrimSpace(req.Region))
+	if err := validators.ValidateCountryCode(req.Region); err != nil {
+		return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+	}
+
+	{
 		req.Region = strings.ToUpper(strings.TrimSpace(req.Region))
 		if err := validators.ValidateCountryCode(req.Region); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
@@ -94,43 +102,8 @@ func WifiConfigHandler(c *fiber.Ctx) error {
 		database.InsertLog("ERROR", database.LogMsgErr("cambiar región WiFi a "+req.Region, errorMsg, user.Username), "wifi", &userID)
 		return c.Status(500).JSON(fiber.Map{"error": errorMsg})
 	}
-
-	if req.SSID != "" {
-		if err := validators.ValidateSSID(req.SSID); err != nil {
-			return err
-		}
-		if len(req.Password) > 128 {
-			return c.Status(400).JSON(fiber.Map{
-				"error": "La contraseña no puede tener más de 128 caracteres",
-			})
-		}
-
-		country := req.Region
-		if country == "" {
-			country = constants.DefaultCountryCode
-		}
-
-		result := ConnectWiFi(req.SSID, req.Password, constants.DefaultWiFiInterface, country, user.Username)
-		if success, ok := result["success"].(bool); ok && success {
-			database.InsertLog("INFO", database.LogMsg("Conexión WiFi a "+req.SSID+" correcta", user.Username), "wifi", &userID)
-			return c.JSON(result)
-		}
-
-		errorMsg := "Error desconocido"
-		if errorMsgVal, ok := result["error"].(string); ok && errorMsgVal != "" {
-			errorMsg = errorMsgVal
-		}
-		database.InsertLog("ERROR", database.LogMsgErr("conectar WiFi a "+req.SSID, errorMsg, user.Username), "wifi", &userID)
-		return c.Status(500).JSON(fiber.Map{
-			"success": false,
-			"error":   errorMsg,
-			"message": fmt.Sprintf("Error conectando a %s", req.SSID),
-		})
-	}
-
-	return c.Status(400).JSON(fiber.Map{"error": "Se requiere ssid o region"})
 }
 
 func WifiStatusHandler(c *fiber.Ctx) error {
-	return WifiLegacyStatusHandler(c)
+	return wifiRuntimeStatusHandler(c)
 }

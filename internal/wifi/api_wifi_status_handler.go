@@ -10,7 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-func WifiLegacyStatusHandler(c *fiber.Ctx) error {
+func wifiRuntimeStatusHandler(c *fiber.Ctx) error {
 	var enabled bool = false
 	var hardBlocked bool = false
 	var softBlocked bool = false

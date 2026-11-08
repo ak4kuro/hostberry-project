@@ -13,6 +13,7 @@ import (
 	"hostberry/internal/constants"
 	"hostberry/internal/utils"
 	"hostberry/internal/validators"
+	"hostberry/internal/wifi"
 )
 
 // executeCommand delega al helper seguro en internal/utils.
@@ -1608,8 +1609,35 @@ wpa_cli -i %s reconfigure 2>/dev/null || true
 		log.Printf("Warning: could not enforce single-client AP limit: %v", err)
 	}
 
+	// Sincronizar el perfil dual-band persistido: si no, una llamada posterior a
+	// EnsureDualBandHostapd (cambio de banda, wizard, arranque) regeneraría
+	// hostapd.conf desde ap-dual-band.json y revertiría esta configuración.
+	syncDualBandProfileFromLegacyConfig(req)
+
 	return c.JSON(fiber.Map{
 		"success": true,
 		"message": "Configuration saved and services restarted",
 	})
+}
+
+// syncDualBandProfileFromLegacyConfig refleja la configuración single-band del
+// endpoint /hostapd/config en los perfiles dual-band (ap-dual-band.json) para
+// que ambos caminos de escritura de hostapd.conf no diverjan.
+func syncDualBandProfileFromLegacyConfig(req HostapdConfigBody) {
+	country := strings.ToUpper(strings.TrimSpace(req.Country))
+	cfg := wifi.LoadDualBandAPConfig(country)
+	for _, p := range []*wifi.DualBandAPProfile{&cfg.Band24, &cfg.Band5} {
+		p.SSID = req.SSID
+		p.Security = req.Security
+		p.Password = req.Password
+		p.Country = country
+	}
+	if req.Channel > 14 {
+		cfg.Band5.Channel = req.Channel
+	} else {
+		cfg.Band24.Channel = req.Channel
+	}
+	if err := wifi.SaveDualBandAPConfig(cfg); err != nil {
+		log.Printf("Warning: could not sync dual-band AP profile: %v", err)
+	}
 }
