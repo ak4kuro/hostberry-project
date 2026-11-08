@@ -159,7 +159,7 @@ func applyDualBandHostapdServices() string {
 	}
 	iface := constants.DefaultWiFiInterface
 	if hostapdProcessOrUnitActive() {
-		if out, err := executeCommand("hostapd_cli -i ap0 reload"); err != nil {
+		if out, err := executeArgv("hostapd_cli", "-i", "ap0", "reload"); err != nil {
 			log.Printf("Warning: hostapd_cli reload: %v (%s)", err, strings.TrimSpace(out))
 		}
 		if freq := wifi.StaLinkFrequencyExport(iface); freq > 0 {

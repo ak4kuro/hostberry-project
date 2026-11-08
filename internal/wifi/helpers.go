@@ -683,16 +683,26 @@ func wifiAuthFailureDetected(interfaceName, statusOut string) bool {
 		strings.Contains(lower, "reason=15") // 4WAY_HANDSHAKE_TIMEOUT
 }
 
+// requestWiFiDHCP solicita IP por DHCP probando dhclient y, si falla,
+// udhcpc (BusyBox). Equivale al antiguo `dhclient || udhcpc` en shell.
+func requestWiFiDHCP(interfaceName string) {
+	if _, err := utils.ExecuteArgv("dhclient", "-v", interfaceName); err == nil {
+		return
+	}
+	_, _ = utils.ExecuteArgv("udhcpc", "-i", interfaceName, "-q", "-n")
+}
+
 func startWpaSupplicant(interfaceName, configPath, runDir string) error {
 	if runDir == "" {
 		runDir = "/run/wpa_supplicant"
 	}
 	i18n.LogTf("logs.wpa_starting", interfaceName, configPath, runDir)
 
-	utils.ExecuteCommand(fmt.Sprintf("sudo mkdir -p %s 2>/dev/null || true", runDir))
-	utils.ExecuteCommand(fmt.Sprintf("sudo chmod 775 %s 2>/dev/null || true", runDir))
-	utils.ExecuteCommand(fmt.Sprintf("sudo chown root:netdev %s 2>/dev/null || true", runDir))
-	utils.ExecuteCommand(fmt.Sprintf("sudo rm -f %s/%s 2>/dev/null || true", runDir, interfaceName))
+	// argv: los errores se ignoran igual que el antiguo `|| true`.
+	_, _ = utils.ExecuteArgv("mkdir", "-p", runDir)
+	_, _ = utils.ExecuteArgv("chmod", "775", runDir)
+	_, _ = utils.ExecuteArgv("chown", "root:netdev", runDir)
+	_, _ = utils.ExecuteArgv("rm", "-f", filepath.Join(runDir, interfaceName))
 
 	configPath = resolveWpaConfigPath(interfaceName, configPath)
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -748,7 +758,7 @@ func startWpaSupplicant(interfaceName, configPath, runDir string) error {
 	var lastOut string
 
 	for _, driver := range tryDrivers {
-		utils.ExecuteCommand(fmt.Sprintf("sudo rm -f %s/%s 2>/dev/null || true", runDir, interfaceName))
+		_, _ = utils.ExecuteArgv("rm", "-f", filepath.Join(runDir, interfaceName))
 		startOut, startErr := tryStart(driver)
 		outStr := string(startOut)
 		if startErr != nil {
@@ -760,7 +770,7 @@ func startWpaSupplicant(interfaceName, configPath, runDir string) error {
 			}
 			if strings.Contains(outStr, "ctrl_iface exists") || strings.Contains(outStr, "cannot override it") {
 				i18n.LogT("logs.wpa_socket_in_use")
-				utils.ExecuteCommand(fmt.Sprintf("sudo rm -f %s/%s 2>/dev/null || true", runDir, interfaceName))
+				_, _ = utils.ExecuteArgv("rm", "-f", filepath.Join(runDir, interfaceName))
 				startOut, startErr = tryStart(driver)
 				if startErr != nil {
 					lastOut = string(startOut)
@@ -825,7 +835,7 @@ func startWpaSupplicant(interfaceName, configPath, runDir string) error {
 			return nil
 		}
 
-		utils.ExecuteCommand(fmt.Sprintf("sudo pkill -f 'wpa_supplicant.*%s' 2>/dev/null || true", interfaceName))
+		_, _ = utils.ExecuteArgv("pkill", "-f", "wpa_supplicant.*"+interfaceName)
 		lastErr = fmt.Errorf("wpa_supplicant se ejecutó pero se detuvo de inmediato. Comprueba la interfaz %s y los logs (journalctl -u hostberry)", interfaceName)
 		lastOut = outStr
 	}
@@ -897,8 +907,8 @@ func waitForWpaCliConnection(interfaceName string, maxAttempts int) (string, err
 			if _, err := os.Stat(socketPath); err == nil {
 				i18n.LogTf("logs.wpa_socket_found", socketPath)
 				workingSocketDir = dir
-				utils.ExecuteCommand(fmt.Sprintf("sudo chmod 660 %s 2>/dev/null || true", socketPath))
-				utils.ExecuteCommand(fmt.Sprintf("sudo chown root:netdev %s 2>/dev/null || true", socketPath))
+				_, _ = utils.ExecuteArgv("chmod", "660", socketPath)
+				_, _ = utils.ExecuteArgv("chown", "root:netdev", socketPath)
 			}
 
 			pingOut, pingErr := runWpaCli("wpa_cli", "-i", interfaceName, "-p", dir, "ping")

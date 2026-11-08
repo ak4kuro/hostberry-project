@@ -22,6 +22,10 @@ func executeCommand(cmd string) (string, error) {
 	return utils.ExecuteCommand(cmd)
 }
 
+func executeArgv(args ...string) (string, error) {
+	return utils.ExecuteArgv(args...)
+}
+
 var ipv4Re = regexp.MustCompile(`(?m)(\b(?:\d{1,3}\.){3}\d{1,3}\b)`)
 
 func getHostnameStatic() string {
@@ -291,8 +295,7 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 				var lastOutput string
 
 				if !hostnameApplied {
-					cmd := fmt.Sprintf("sudo hostnamectl set-hostname %s", req.Hostname)
-					if out, err := executeCommand(cmd); err == nil {
+					if out, err := executeArgv("hostnamectl", "set-hostname", req.Hostname); err == nil {
 						time.Sleep(500 * time.Millisecond)
 						currentHostname := getHostnameStatic()
 						if currentHostname == req.Hostname {
@@ -329,8 +332,7 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 								if content, err := os.ReadFile(hostnameFile); err == nil {
 									writtenHostname := strings.TrimSpace(string(content))
 									if writtenHostname == req.Hostname {
-										applyCmdStr := fmt.Sprintf("sudo hostname %s", req.Hostname)
-										if applyOut, applyErr := executeCommand(applyCmdStr); applyErr == nil {
+										if applyOut, applyErr := executeArgv("hostname", req.Hostname); applyErr == nil {
 											verifyCmd := exec.Command("hostname")
 											if verifyOut, err := verifyCmd.Output(); err == nil {
 												currentHostname := strings.TrimSpace(string(verifyOut))
@@ -369,8 +371,7 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 				}
 
 				if !hostnameApplied {
-					cmd := fmt.Sprintf("sudo hostname %s", req.Hostname)
-					if out, err := executeCommand(cmd); err == nil {
+					if out, err := executeArgv("hostname", req.Hostname); err == nil {
 						time.Sleep(200 * time.Millisecond)
 						verifyCmd := exec.Command("hostname")
 						if verifyOut, err := verifyCmd.Output(); err == nil {
@@ -563,12 +564,7 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 								}
 
 								if copySuccess {
-									chmodPath := "/bin/chmod"
-									if _, err := os.Stat(chmodPath); os.IsNotExist(err) {
-										chmodPath = "/usr/bin/chmod"
-									}
-									chmodCmd := fmt.Sprintf("sudo %s 644 %s", chmodPath, hostsFile)
-									if out, err := executeCommand(chmodCmd); err != nil {
+									if out, err := executeArgv("chmod", "644", hostsFile); err != nil {
 										log.Printf("Warning: Could not set permissions: %v, output: %s", err, out)
 									} else {
 										log.Printf("Permissions set correctly")
@@ -677,7 +673,7 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 
 					newContent := strings.Join(newLines, "\n")
 					if err := writeFileWithSudoTee(resolvedConf, newContent); err == nil {
-						executeCommand("sudo systemctl restart systemd-resolved 2>&1")
+						_, _ = executeArgv("systemctl", "restart", "systemd-resolved")
 						applied = append(applied, fmt.Sprintf("DNS set to %s (via systemd-resolved)", strings.Join(dnsServers, ", ")))
 						dnsApplied = true
 						log.Printf("DNS configured via systemd-resolved: %s", dnsStr)
@@ -688,7 +684,7 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 
 		if !dnsApplied {
 			resolvConf := "/etc/resolv.conf"
-			executeCommand(fmt.Sprintf("sudo cp %s %s.backup 2>/dev/null || true", resolvConf, resolvConf))
+			_, _ = executeArgv("cp", resolvConf, resolvConf+".backup")
 
 			content, err := os.ReadFile(resolvConf)
 			if err == nil {
@@ -755,9 +751,8 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 				}
 
 				if iface != "" {
-					executeCommand("sudo ip route del default 2>/dev/null || true")
-					cmd := fmt.Sprintf("sudo ip route add default via %s dev %s 2>&1", req.Gateway, iface)
-					if out, err := executeCommand(cmd); err == nil {
+					_, _ = executeArgv("ip", "route", "del", "default")
+					if out, err := executeArgv("ip", "route", "add", "default", "via", req.Gateway, "dev", iface); err == nil {
 						applied = append(applied, fmt.Sprintf("Gateway set to %s (via ip route)", req.Gateway))
 						gatewayApplied = true
 						log.Printf("Gateway configured via ip route: %s on %s", req.Gateway, iface)
@@ -765,9 +760,8 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 						log.Printf("ip route gateway configuration failed: %v, output: %s", err, out)
 					}
 				} else {
-					executeCommand("sudo ip route del default 2>/dev/null || true")
-					cmd := fmt.Sprintf("sudo ip route add default via %s 2>&1", req.Gateway)
-					if out, err := executeCommand(cmd); err == nil {
+					_, _ = executeArgv("ip", "route", "del", "default")
+					if out, err := executeArgv("ip", "route", "add", "default", "via", req.Gateway); err == nil {
 						applied = append(applied, fmt.Sprintf("Gateway set to %s (via ip route)", req.Gateway))
 						gatewayApplied = true
 						log.Printf("Gateway configured via ip route: %s", req.Gateway)
@@ -779,16 +773,19 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 
 			if !gatewayApplied {
 				iface := ""
-				if out, err := exec.Command("route", "-n").Output(); err == nil {
-					for _, line := range strings.Split(string(out), "\n") {
-						line = strings.TrimSpace(line)
-						if line == "" || !strings.HasPrefix(line, "0.0.0.0") {
+				if out, err := executeArgv("ip", "route"); err == nil {
+					for _, line := range strings.Split(out, "\n") {
+						fields := strings.Fields(line)
+						if len(fields) < 2 || fields[0] != "default" {
 							continue
 						}
-						fields := strings.Fields(line)
-						// route -n: Destination Gateway Genmask Flags Metric Ref Use Iface
-						if len(fields) >= 8 {
-							iface = fields[7]
+						for i := 1; i+1 < len(fields); i++ {
+							if fields[i] == "dev" {
+								iface = fields[i+1]
+								break
+							}
+						}
+						if iface != "" {
 							break
 						}
 					}
@@ -798,14 +795,13 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 				}
 
 				if iface != "" {
-					executeCommand("sudo route del default 2>/dev/null || true")
-					cmd := fmt.Sprintf("sudo route add default gw %s %s 2>&1", req.Gateway, iface)
-					if out, err := executeCommand(cmd); err == nil {
-						applied = append(applied, fmt.Sprintf("Gateway set to %s (via route)", req.Gateway))
+					_, _ = executeArgv("ip", "route", "del", "default")
+					if out, err := executeArgv("ip", "route", "add", "default", "via", req.Gateway, "dev", iface); err == nil {
+						applied = append(applied, fmt.Sprintf("Gateway set to %s (via ip route)", req.Gateway))
 						gatewayApplied = true
-						log.Printf("Gateway configured via route: %s on %s", req.Gateway, iface)
+						log.Printf("Gateway configured via ip route: %s on %s", req.Gateway, iface)
 					} else {
-						log.Printf("route gateway configuration failed: %v, output: %s", err, out)
+						log.Printf("ip route gateway configuration failed: %v, output: %s", err, out)
 					}
 				}
 			}

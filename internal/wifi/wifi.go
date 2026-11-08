@@ -1028,8 +1028,8 @@ func AutoConnectToLastNetwork(interfaceName string) {
 
 	// Activar switch y WiFi
 	i18n.LogT("logs.wifi_activating")
-	utils.ExecuteCommand("sudo rfkill unblock wifi 2>/dev/null || true")
-	utils.ExecuteCommand(fmt.Sprintf("sudo ip link set %s up 2>/dev/null || true", interfaceName))
+	_, _ = utils.ExecuteArgv("rfkill", "unblock", "wifi")
+	_, _ = utils.ExecuteArgv("ip", "link", "set", interfaceName, "up")
 	time.Sleep(1 * time.Second)
 
 	// Intentar reconectar con wpa_cli si wpa_supplicant está corriendo
@@ -1119,7 +1119,7 @@ func AutoConnectToLastNetwork(interfaceName string) {
 							if strings.Contains(statusOut2, "wpa_state=COMPLETED") {
 								i18n.LogT("logs.wifi_reconnected")
 								go func() {
-									utils.ExecuteCommand(fmt.Sprintf("sudo dhclient -v %s 2>&1 || sudo udhcpc -i %s -q -n 2>&1 || true", interfaceName, interfaceName))
+									requestWiFiDHCP(interfaceName)
 									EnsureAPChannelAligned(interfaceName)
 								}()
 								return
@@ -1236,7 +1236,7 @@ func AutoConnectToLastNetwork(interfaceName string) {
 	// key_mgmt=NONE y la conexión fallaría tras el reinicio post-wizard.
 	stopWpaSupplicant(interfaceName)
 	if dbusWpaSupplicantRunning() {
-		utils.ExecuteCommand("sudo systemctl stop wpa_supplicant 2>/dev/null || true")
+		_, _ = utils.ExecuteArgv("systemctl", "stop", "wpa_supplicant")
 		time.Sleep(1 * time.Second)
 	}
 	time.Sleep(1 * time.Second)
@@ -1299,9 +1299,9 @@ func AutoConnectToLastNetwork(interfaceName string) {
 
 	log.Printf("📡 Solicitando IP con DHCP...")
 	go func() {
-		utils.ExecuteCommand(fmt.Sprintf("sudo pkill -f 'dhclient.*%s|udhcpc.*%s' 2>/dev/null || true", interfaceName, interfaceName))
+		_, _ = utils.ExecuteArgv("pkill", "-f", "dhclient.*"+interfaceName+"|udhcpc.*"+interfaceName)
 		time.Sleep(300 * time.Millisecond)
-		utils.ExecuteCommand(fmt.Sprintf("sudo dhclient -v %s 2>&1 || sudo udhcpc -i %s -q -n 2>&1 || true", interfaceName, interfaceName))
+		requestWiFiDHCP(interfaceName)
 	}()
 
 	var ip string

@@ -28,6 +28,11 @@ func executeCommand(cmd string) (string, error) {
 	return utils.ExecuteCommand(cmd)
 }
 
+// executeArgv ejecuta un comando como argv (sin shell).
+func executeArgv(args ...string) (string, error) {
+	return utils.ExecuteArgv(args...)
+}
+
 func getAdBlockStatus() map[string]interface{} {
 	result := make(map[string]interface{})
 
@@ -108,10 +113,8 @@ func enableAdBlock(user string) map[string]interface{} {
 
 	i18n.LogTf("logs.adblock_enabling", user)
 
-	dnsmasqCmd := "sudo systemctl start dnsmasq"
-	if _, err := executeCommand(dnsmasqCmd); err != nil {
-		piholeCmd := "sudo systemctl start pihole-FTL"
-		if out2, err2 := executeCommand(piholeCmd); err2 != nil {
+	if _, err := executeArgv("systemctl", "start", "dnsmasq"); err != nil {
+		if out2, err2 := executeArgv("systemctl", "start", "pihole-FTL"); err2 != nil {
 			result["success"] = false
 			result["error"] = err2.Error()
 			if out2 != "" {
@@ -138,8 +141,8 @@ func disableAdBlock(user string) map[string]interface{} {
 
 	i18n.LogTf("logs.adblock_disabling", user)
 
-	executeCommand("sudo systemctl stop dnsmasq 2>/dev/null || true")
-	executeCommand("sudo systemctl stop blocky")
+	_, _ = executeArgv("systemctl", "stop", "dnsmasq")
+	_, _ = executeArgv("systemctl", "stop", "blocky")
 
 	result["success"] = true
 	result["message"] = "AdBlock deshabilitado"
@@ -223,8 +226,14 @@ func installDNSCrypt(user string) map[string]interface{} {
 
 	// Intentar instalar dnscrypt-proxy
 	// Primero intentar con apt (Debian/Ubuntu)
-	installCmd := "sudo apt-get update && sudo apt-get install -y dnscrypt-proxy"
-	if out, err := executeCommand(installCmd); err != nil {
+	var out string
+	var err error
+	if _, uerr := executeArgv("apt-get", "update"); uerr == nil {
+		out, err = executeArgv("apt-get", "install", "-y", "dnscrypt-proxy")
+	} else {
+		err = uerr
+	}
+	if err != nil {
 		// Si falla, intentar compilar desde fuente o usar otro método
 		i18n.LogTf("logs.dnscrypt_install_error", err)
 		result["success"] = false
@@ -261,7 +270,7 @@ func configureDNSCrypt(serverName string, blockAds bool, user string) map[string
 	configPath := filepath.Join(configDir, "dnscrypt-proxy.toml")
 
 	// Crear directorio si no existe
-	executeCommand(fmt.Sprintf("sudo mkdir -p %s", configDir))
+	_, _ = executeArgv("mkdir", "-p", configDir)
 
 	// Servidores DNSCrypt recomendados que filtran publicidad
 	servers := map[string]string{
@@ -356,7 +365,7 @@ googlesyndication.*
 	}
 
 	// Crear directorio de logs
-	executeCommand("sudo mkdir -p /var/log/dnscrypt-proxy")
+	_, _ = executeArgv("mkdir", "-p", "/var/log/dnscrypt-proxy")
 
 	result["success"] = true
 	result["message"] = "DNSCrypt configurado correctamente"
@@ -396,8 +405,7 @@ func enableDNSCrypt(user string) map[string]interface{} {
 	}
 
 	// Iniciar servicio
-	startCmd := "sudo systemctl start dnscrypt-proxy"
-	if out, err := executeCommand(startCmd); err != nil {
+	if out, err := executeArgv("systemctl", "start", "dnscrypt-proxy"); err != nil {
 		result["success"] = false
 		result["error"] = fmt.Sprintf("Error iniciando DNSCrypt: %v", err)
 		if out != "" {
@@ -408,19 +416,18 @@ func enableDNSCrypt(user string) map[string]interface{} {
 	}
 
 	// Habilitar para iniciar al arranque
-	executeCommand("sudo systemctl enable dnscrypt-proxy")
+	_, _ = executeArgv("systemctl", "enable", "dnscrypt-proxy")
 
 	// Configurar sistema para usar DNSCrypt como DNS local
 	// Cambiar /etc/resolv.conf para apuntar a 127.0.0.1
 	resolvConf := "/etc/resolv.conf"
-	backupCmd := fmt.Sprintf("sudo cp %s %s.backup 2>/dev/null || true", resolvConf, resolvConf)
-	executeCommand(backupCmd)
+	_, _ = executeArgv("cp", resolvConf, resolvConf+".backup")
 
 	// Poner nameserver local preservando el resto de resolv.conf
 	writeResolvConfNameservers("127.0.0.1", "::1")
 
 	// Reiniciar systemd-resolved si existe
-	executeCommand("sudo systemctl restart systemd-resolved 2>/dev/null || true")
+	_, _ = executeArgv("systemctl", "restart", "systemd-resolved")
 
 	result["success"] = true
 	result["message"] = "DNSCrypt habilitado correctamente"
@@ -438,22 +445,21 @@ func disableDNSCrypt(user string) map[string]interface{} {
 	i18n.LogTf("logs.dnscrypt_disabling", user)
 
 	// Detener servicio
-	executeCommand("sudo systemctl stop dnscrypt-proxy")
-	executeCommand("sudo systemctl disable dnscrypt-proxy")
+	_, _ = executeArgv("systemctl", "stop", "dnscrypt-proxy")
+	_, _ = executeArgv("systemctl", "disable", "dnscrypt-proxy")
 
 	// Restaurar /etc/resolv.conf si existe backup
 	resolvConf := "/etc/resolv.conf"
 	backupPath := resolvConf + ".backup"
 	if _, err := os.Stat(backupPath); err == nil {
-		restoreCmd := fmt.Sprintf("sudo cp %s %s", backupPath, resolvConf)
-		executeCommand(restoreCmd)
+		_, _ = executeArgv("cp", backupPath, resolvConf)
 	} else {
 		// Sin backup: conservar comentarios/directivas y solo cambiar DNS
 		writeResolvConfNameservers("8.8.8.8", "8.8.4.4")
 	}
 
 	// Reiniciar systemd-resolved si existe
-	executeCommand("sudo systemctl restart systemd-resolved 2>/dev/null || true")
+	_, _ = executeArgv("systemctl", "restart", "systemd-resolved")
 
 	result["success"] = true
 	result["message"] = "DNSCrypt deshabilitado correctamente"
@@ -493,7 +499,7 @@ func writeResolvConfNameservers(servers ...string) {
 		i18n.LogTf("logs.dnscrypt_resolv_error", err)
 		return
 	}
-	if _, err := executeCommand(fmt.Sprintf("sudo cp %s %s", tmpPath, resolvConf)); err != nil {
+	if _, err := executeArgv("cp", tmpPath, resolvConf); err != nil {
 		i18n.LogTf("logs.dnscrypt_resolv_error", err)
 	}
 }
@@ -718,7 +724,7 @@ func installBlocky(user string) map[string]interface{} {
 		result["error"] = fmt.Sprintf("Error creando directorio temporal: %v", err)
 		return result
 	}
-	defer func() { executeCommand("sudo rm -rf " + tmpDir) }()
+	defer func() { _, _ = executeArgv("rm", "-rf", tmpDir) }()
 
 	// Descargar con HTTP desde Go (no depender de curl en PATH)
 	tarballPath := filepath.Join(os.TempDir(), "blocky_download.tar.gz")
@@ -770,13 +776,9 @@ func installBlocky(user string) map[string]interface{} {
 	}
 
 	// Copiar a dir con sudo y extraer con tar (ruta absoluta para no depender de PATH)
-	copyCmd := fmt.Sprintf("sudo cp %s %s/blocky.tar.gz", tarballPath, tmpDir)
-	if out, err := executeCommand(copyCmd); err != nil {
+	if out, err := executeArgv("cp", tarballPath, filepath.Join(tmpDir, "blocky.tar.gz")); err != nil {
 		result["success"] = false
-		result["error"] = fmt.Sprintf("Error copiando descarga: %v", err)
-		if out != "" {
-			result["error"] = strings.TrimSpace(out)
-		}
+		result["error"] = fmt.Sprintf("Error copiando descarga: %v (%s)", err, strings.TrimSpace(out))
 		return result
 	}
 	// Importante: evitar "sudo sh -c" para no depender de shells desde executeCommand.
@@ -816,7 +818,7 @@ func installBlocky(user string) map[string]interface{} {
 	}
 
 	// Crear directorio de configuración
-	executeCommand("sudo mkdir -p " + blockyConfigDir)
+	_, _ = executeArgv("mkdir", "-p", blockyConfigDir)
 
 	// Crear unidad systemd
 	serviceContent := `[Unit]
@@ -840,11 +842,11 @@ WantedBy=multi-user.target
 		result["error"] = fmt.Sprintf("Error creando servicio systemd: %v", err)
 		return result
 	}
-	executeCommand("sudo systemctl daemon-reload")
+	_, _ = executeArgv("systemctl", "daemon-reload")
 	// Que Blocky arranque con el sistema
-	executeCommand("sudo systemctl enable blocky")
+	_, _ = executeArgv("systemctl", "enable", "blocky")
 
-	executeCommand("sudo rm -rf " + tmpDir)
+	_, _ = executeArgv("rm", "-rf", tmpDir)
 
 	result["success"] = true
 	result["message"] = "Blocky instalado correctamente"
@@ -999,7 +1001,7 @@ log:
 			return result
 		}
 	} else {
-		if _, err := executeCommand("sudo mkdir -p " + blockyConfigDir); err != nil {
+		if _, err := executeArgv("mkdir", "-p", blockyConfigDir); err != nil {
 			result["success"] = false
 			result["error"] = fmt.Sprintf("Error creando directorio: %v", err)
 			return result
@@ -1023,8 +1025,7 @@ log:
 			result["error"] = fmt.Sprintf("Error cerrando archivo: %v", err)
 			return result
 		}
-		cpCmd := "sudo cp " + tmpPath + " " + blockyConfigPath
-		out, cpErr := executeCommand(cpCmd)
+		out, cpErr := executeArgv("cp", tmpPath, blockyConfigPath)
 		if cpErr != nil {
 			result["success"] = false
 			result["error"] = "Error escribiendo configuración: " + strings.TrimSpace(out)
@@ -1070,10 +1071,9 @@ func enableBlocky(user string) map[string]interface{} {
 	}
 
 	// Liberar puerto 53: detener dnsmasq si está (Blocky es el único DNS que usamos)
-	executeCommand("sudo systemctl stop dnsmasq 2>/dev/null || true")
+	_, _ = executeArgv("systemctl", "stop", "dnsmasq")
 
-	startCmd := "sudo systemctl start blocky"
-	if out, err := executeCommand(startCmd); err != nil {
+	if out, err := executeArgv("systemctl", "start", "blocky"); err != nil {
 		result["success"] = false
 		result["error"] = fmt.Sprintf("Error iniciando Blocky: %v", err)
 		if out != "" {
@@ -1083,15 +1083,14 @@ func enableBlocky(user string) map[string]interface{} {
 		return result
 	}
 
-	executeCommand("sudo systemctl enable blocky")
+	_, _ = executeArgv("systemctl", "enable", "blocky")
 
 	// Configurar resolv.conf para usar Blocky local
 	resolvConf := "/etc/resolv.conf"
-	backupCmd := fmt.Sprintf("sudo cp %s %s.backup 2>/dev/null || true", resolvConf, resolvConf)
-	executeCommand(backupCmd)
+	_, _ = executeArgv("cp", resolvConf, resolvConf+".backup")
 
 	writeResolvConfNameservers("127.0.0.1", "::1")
-	executeCommand("sudo systemctl restart systemd-resolved 2>/dev/null || true")
+	_, _ = executeArgv("systemctl", "restart", "systemd-resolved")
 
 	result["success"] = true
 	result["message"] = "Blocky habilitado correctamente"
@@ -1108,17 +1107,17 @@ func disableBlocky(user string) map[string]interface{} {
 
 	i18n.LogTf("logs.blocky_disabling", user)
 
-	executeCommand("sudo systemctl stop blocky")
-	executeCommand("sudo systemctl disable blocky")
+	_, _ = executeArgv("systemctl", "stop", "blocky")
+	_, _ = executeArgv("systemctl", "disable", "blocky")
 
 	resolvConf := "/etc/resolv.conf"
 	backupPath := resolvConf + ".backup"
 	if _, err := os.Stat(backupPath); err == nil {
-		executeCommand(fmt.Sprintf("sudo cp %s %s", backupPath, resolvConf))
+		_, _ = executeArgv("cp", backupPath, resolvConf)
 	} else {
 		writeResolvConfNameservers("8.8.8.8", "8.8.4.4")
 	}
-	executeCommand("sudo systemctl restart systemd-resolved 2>/dev/null || true")
+	_, _ = executeArgv("systemctl", "restart", "systemd-resolved")
 
 	result["success"] = true
 	result["message"] = "Blocky deshabilitado correctamente"

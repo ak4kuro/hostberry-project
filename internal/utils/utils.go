@@ -160,6 +160,7 @@ var allowedShellCommands = []string{
 	"rfkill", "ifconfig", "iwconfig",
 	"hostapd", "hostapd_cli", "dnsmasq", "iptables", "iptables-save", "netfilter-persistent", "sysctl", "tee", "cp", "mkdir", "echo", "chmod", "chown", "rm",
 	"dhclient", "udhcpc", "wpa_supplicant", "wpa_cli", "pkill", "killall",
+	"udevadm",
 	"apt-get", "apt",
 	"true",
 }
@@ -517,6 +518,128 @@ func privilegedExecPath() string {
 // el helper sin tener que re-implementar la lógica de sudo/no-sudo.
 func ExecCommand(cmd string) *exec.Cmd {
 	return execCommand(cmd)
+}
+
+// validateArgvAllowList comprueba que el binario de una invocación argv esté
+// en la allowlist. Los argumentos no se inspeccionan: al no pasar por un
+// shell no pueden inyectar sintaxis.
+func validateArgvAllowList(args []string) error {
+	if len(args) == 0 {
+		return exec.ErrNotFound
+	}
+	base := args[0]
+	if idx := strings.LastIndexByte(base, '/'); idx >= 0 {
+		base = base[idx+1:]
+	}
+	for _, a := range allowedShellCommands {
+		if base == a {
+			return nil
+		}
+	}
+	return exec.ErrNotFound
+}
+
+// argvBase devuelve el nombre del binario sin ruta.
+func argvBase(args []string) string {
+	base := args[0]
+	if idx := strings.LastIndexByte(base, '/'); idx >= 0 {
+		base = base[idx+1:]
+	}
+	return base
+}
+
+// execArgvCommand construye el *exec.Cmd equivalente a execCommand pero sin
+// pasar por un shell: los argumentos llegan literalmente al binario.
+func execArgvCommand(args []string) *exec.Cmd {
+	if os.Geteuid() == 0 {
+		return exec.Command(args[0], args[1:]...)
+	}
+
+	if canUseSudo() {
+		if priv := privilegedExecPath(); priv != "" {
+			if _, err := os.Stat(priv); err == nil {
+				argv := make([]string, 0, len(args)+2)
+				argv = append(argv, priv, "--argv")
+				argv = append(argv, args...)
+				return exec.Command("sudo", argv...)
+			}
+		}
+		return exec.Command("sudo", args...)
+	}
+
+	return exec.Command(args[0], args[1:]...)
+}
+
+// ExecuteArgv ejecuta un comando como argv (sin shell) con timeout por
+// defecto. Solo se permiten binarios de la allowlist; los argumentos se
+// pasan literalmente, eliminando la clase de bugs de quoting/inyección.
+func ExecuteArgv(args ...string) (string, error) {
+	return ExecuteArgvWithTimeout(args, defaultCommandTimeout)
+}
+
+// ExecuteArgvWithTimeout igual que ExecuteArgv con timeout explícito.
+// El caché solo aplica a invocaciones de solo lectura que terminan bien,
+// reutilizando la misma clasificación que la variante shell.
+func ExecuteArgvWithTimeout(args []string, timeout time.Duration) (string, error) {
+	if err := validateArgvAllowList(args); err != nil {
+		return "", err
+	}
+
+	base := argvBase(args)
+	cacheable := isReadOnlyInvocation(base, args[1:])
+	cacheKey := strings.Join(args, "\x00") + "|" + timeout.String()
+
+	if cacheable {
+		cacheMutex.RLock()
+		if cached, exists := commandCache[cacheKey]; exists {
+			if time.Since(cached.timestamp) < cacheTTL {
+				cacheMutex.RUnlock()
+				return cached.output, cached.err
+			}
+		}
+		cacheMutex.RUnlock()
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	baseCmd := execArgvCommand(args)
+	cmdObj := exec.CommandContext(ctx, baseCmd.Path)
+	cmdObj.Args = baseCmd.Args
+	cmdObj.Env = append(os.Environ(),
+		"SUDO_ASKPASS=/bin/false",
+		"SUDO_LOG_FILE=",
+		"HOSTNAME="+getHostname(),
+	)
+
+	out, err := cmdObj.CombinedOutput()
+	outputStr := FilterSudoErrorString(string(out))
+
+	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			err = exec.ErrNotFound
+		}
+		if outputStr == "" {
+			return "", err
+		}
+	}
+
+	result := strings.TrimSpace(outputStr)
+
+	if cacheable && err == nil {
+		cacheMutex.Lock()
+		commandCache[cacheKey] = &cachedResult{output: result, timestamp: time.Now()}
+		if len(commandCache) > 100 {
+			for k := range commandCache {
+				if time.Since(commandCache[k].timestamp) > cacheTTL*2 {
+					delete(commandCache, k)
+				}
+			}
+		}
+		cacheMutex.Unlock()
+	}
+
+	return result, err
 }
 
 // commandIsReadOnly indica si todos los comandos de la cadena son de solo

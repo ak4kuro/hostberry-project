@@ -2,7 +2,6 @@ package hostapd
 
 import (
 	"bytes"
-	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -27,8 +26,8 @@ func ApplyNormalAPMode() {
 	dnsmasqChanged := normalizeDnsmasqAPConfig()
 
 	// El servicio del portal cautivo reañade el REDIRECT en cada arranque: hay que deshabilitarlo.
-	executeCommand("systemctl disable hostberry-captive-portal.service 2>/dev/null || true")
-	executeCommand("systemctl stop hostberry-captive-portal.service 2>/dev/null || true")
+	_, _ = executeArgv("systemctl", "disable", "hostberry-captive-portal.service")
+	_, _ = executeArgv("systemctl", "stop", "hostberry-captive-portal.service")
 
 	clearCaptivePortalRules()
 	enableAPInternetSharing()
@@ -38,7 +37,7 @@ func ApplyNormalAPMode() {
 	applySavedHostapdSecurity()
 
 	if dnsmasqChanged {
-		if out, err := executeCommand("systemctl restart dnsmasq 2>/dev/null || true"); err != nil {
+		if out, err := executeArgv("systemctl", "restart", "dnsmasq"); err != nil {
 			log.Printf("AP normal: restart dnsmasq: %v (%s)", err, strings.TrimSpace(out))
 		}
 	}
@@ -51,11 +50,11 @@ func ApplyNormalAPMode() {
 func ApplyCaptivePortalMode() {
 	changed := captivizeDnsmasqAPConfig()
 
-	executeCommand("systemctl enable hostberry-captive-portal.service 2>/dev/null || true")
-	executeCommand("systemctl start hostberry-captive-portal.service 2>/dev/null || true")
+	_, _ = executeArgv("systemctl", "enable", "hostberry-captive-portal.service")
+	_, _ = executeArgv("systemctl", "start", "hostberry-captive-portal.service")
 
 	if changed {
-		if out, err := executeCommand("systemctl restart dnsmasq 2>/dev/null || true"); err != nil {
+		if out, err := executeArgv("systemctl", "restart", "dnsmasq"); err != nil {
 			log.Printf("Portal cautivo: restart dnsmasq: %v (%s)", err, strings.TrimSpace(out))
 		}
 	}
@@ -201,12 +200,12 @@ func clearCaptivePortalRules() {
 	// El REDIRECT amplio captura TODO el HTTP saliente del cliente; hay que borrarlo (varios
 	// puertos destino posibles según versión del instalador).
 	for _, port := range []string{"8000", "443", "8443", "8080", "80", "4433"} {
-		executeCommand(fmt.Sprintf("iptables -t nat -D PREROUTING -i %s -p tcp --dport 80 -j REDIRECT --to-ports %s 2>/dev/null || true", iface, port))
+		_, _ = executeArgv("iptables", "-t", "nat", "-D", "PREROUTING", "-i", iface, "-p", "tcp", "--dport", "80", "-j", "REDIRECT", "--to-ports", port)
 	}
 	// Los REJECT de 443/853 (cadena INPUT) bloquean el acceso al panel por HTTPS y a DoT/DoQ.
-	executeCommand(fmt.Sprintf("iptables -D INPUT -i %s -p tcp --dport 443 -j REJECT --reject-with tcp-reset 2>/dev/null || true", iface))
-	executeCommand(fmt.Sprintf("iptables -D INPUT -i %s -p tcp --dport 853 -j REJECT --reject-with tcp-reset 2>/dev/null || true", iface))
-	executeCommand(fmt.Sprintf("iptables -D INPUT -i %s -p udp --dport 853 -j REJECT --reject-with icmp-port-unreachable 2>/dev/null || true", iface))
+	_, _ = executeArgv("iptables", "-D", "INPUT", "-i", iface, "-p", "tcp", "--dport", "443", "-j", "REJECT", "--reject-with", "tcp-reset")
+	_, _ = executeArgv("iptables", "-D", "INPUT", "-i", iface, "-p", "tcp", "--dport", "853", "-j", "REJECT", "--reject-with", "tcp-reset")
+	_, _ = executeArgv("iptables", "-D", "INPUT", "-i", iface, "-p", "udp", "--dport", "853", "-j", "REJECT", "--reject-with", "icmp-port-unreachable")
 }
 
 // enableAPInternetSharing habilita el reenvío IPv4 y el NAT del subred del AP hacia el uplink.
@@ -216,16 +215,22 @@ func enableAPInternetSharing() {
 	// Reenvío IPv4. No lo persistimos en /etc/sysctl.d (privileged-exec restringe el destino del
 	// cp): como el NAT y el desmontaje del portal cautivo tampoco persisten en iptables, todo el
 	// modo normal se reaplica en cada arranque desde Bootstrap, donde se vuelve a poner a 1.
-	executeCommand("sysctl -w net.ipv4.ip_forward=1 2>/dev/null || true")
+	_, _ = executeArgv("sysctl", "-w", "net.ipv4.ip_forward=1")
 
 	// MASQUERADE independiente de la interfaz de salida: vale tanto si el uplink es Ethernet como
-	// si es la WiFi STA (wlan0). Usamos -C para no duplicar la regla.
-	executeCommand(fmt.Sprintf("iptables -t nat -C POSTROUTING -s %s ! -d %s -j MASQUERADE 2>/dev/null || iptables -t nat -A POSTROUTING -s %s ! -d %s -j MASQUERADE", cidr, cidr, cidr, cidr))
+	// si es la WiFi STA (wlan0). `-C` comprueba y solo `-A` si no existe.
+	if _, err := executeArgv("iptables", "-t", "nat", "-C", "POSTROUTING", "-s", cidr, "!", "-d", cidr, "-j", "MASQUERADE"); err != nil {
+		_, _ = executeArgv("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", cidr, "!", "-d", cidr, "-j", "MASQUERADE")
+	}
 
 	// Permitir el reenvío del subred del AP (defensa por si la política FORWARD no fuera ACCEPT).
 	// La regla de aislamiento ap0->ap0 (si existe) se inserta en la posición 1 y mantiene prioridad.
-	executeCommand(fmt.Sprintf("iptables -C FORWARD -s %s -j ACCEPT 2>/dev/null || iptables -A FORWARD -s %s -j ACCEPT", cidr, cidr))
-	executeCommand(fmt.Sprintf("iptables -C FORWARD -d %s -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || iptables -A FORWARD -d %s -m state --state RELATED,ESTABLISHED -j ACCEPT", cidr, cidr))
+	if _, err := executeArgv("iptables", "-C", "FORWARD", "-s", cidr, "-j", "ACCEPT"); err != nil {
+		_, _ = executeArgv("iptables", "-A", "FORWARD", "-s", cidr, "-j", "ACCEPT")
+	}
+	if _, err := executeArgv("iptables", "-C", "FORWARD", "-d", cidr, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT"); err != nil {
+		_, _ = executeArgv("iptables", "-A", "FORWARD", "-d", cidr, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT")
+	}
 }
 
 // applySavedHostapdSecurity aplica la configuración de seguridad (SSID/contraseña) guardada
@@ -234,7 +239,7 @@ func enableAPInternetSharing() {
 func applySavedHostapdSecurity() {
 	country := constants.DefaultCountryCode
 	cfg := wifi.LoadDualBandAPConfig(country)
-	
+
 	// Determinar la banda activa actual (ConcurrentOperatingBandExport devuelve "2.4" o "5")
 	activeBand := wifi.GetWizardPreferredBand()
 	if activeBand == "" {
@@ -243,7 +248,7 @@ func applySavedHostapdSecurity() {
 	if activeBand == "" {
 		activeBand = "2.4"
 	}
-	
+
 	// Seleccionar el perfil según la banda activa
 	var profile wifi.DualBandAPProfile
 	if activeBand == "5" {
@@ -251,19 +256,19 @@ func applySavedHostapdSecurity() {
 	} else {
 		profile = cfg.Band24
 	}
-	
+
 	// Si el perfil tiene seguridad configurada, aplicarla
 	if profile.Security != "open" && profile.Password != "" {
 		log.Printf("AP normal: aplicando configuración de seguridad guardada (SSID=%s, security=%s)", profile.SSID, profile.Security)
-		
+
 		// Usar EnsureDualBandHostapd con setupPending=false para aplicar la configuración guardada
 		result := wifi.EnsureDualBandHostapdForBand("", false, activeBand)
 		if success, ok := result["success"].(bool); ok && !success {
 			log.Printf("AP normal: error aplicando configuración de seguridad: %v", result["error"])
 		}
-		
+
 		// Reiniciar hostapd para aplicar la nueva configuración
-		if out, err := executeCommand("systemctl restart hostapd 2>/dev/null || true"); err != nil {
+		if out, err := executeArgv("systemctl", "restart", "hostapd"); err != nil {
 			log.Printf("AP normal: restart hostapd tras aplicar seguridad: %v (%s)", err, strings.TrimSpace(out))
 		}
 	}

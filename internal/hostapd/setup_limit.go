@@ -14,19 +14,19 @@ import (
 )
 
 const (
-	hostapdConfigPath       = "/etc/hostapd/hostapd.conf"
-	dnsmasqAPConfigPath     = "/etc/dnsmasq.d/hostberry-ap.conf"
-	dnsmasqMainConfigPath   = "/etc/dnsmasq.conf"
-	defaultSetupClientIP    = "192.168.4.2"
-	defaultDHCPRangeEnd     = "192.168.4.254"
-	defaultDHCPNetmask      = "255.255.255.0"
-	defaultDHCPLeaseTime    = "12h"
+	hostapdConfigPath     = "/etc/hostapd/hostapd.conf"
+	dnsmasqAPConfigPath   = "/etc/dnsmasq.d/hostberry-ap.conf"
+	dnsmasqMainConfigPath = "/etc/dnsmasq.conf"
+	defaultSetupClientIP  = "192.168.4.2"
+	defaultDHCPRangeEnd   = "192.168.4.254"
+	defaultDHCPNetmask    = "255.255.255.0"
+	defaultDHCPLeaseTime  = "12h"
 	// Durante el asistente: pool pequeño y lease corto. Así, cuando un dispositivo se desconecta,
 	// su IP se libera en ~2 min (lease mínimo de dnsmasq) y el siguiente móvil puede conectarse,
 	// evitando el bloqueo "no address available" del rango de una sola IP.
-	setupDHCPRangeEnd       = "192.168.4.20"
-	setupDHCPLeaseTime      = "2m"
-	hostapdMaxNumSTAKey     = "max_num_sta"
+	setupDHCPRangeEnd   = "192.168.4.20"
+	setupDHCPLeaseTime  = "2m"
+	hostapdMaxNumSTAKey = "max_num_sta"
 )
 
 // ApplySingleClientAPLimit ajusta hostapd y dnsmasq para permitir solo un cliente
@@ -37,7 +37,7 @@ func ApplySingleClientAPLimit(enable bool) error {
 	}
 	if auth.IsInitialSetupPending() {
 		if hostapdProcessOrUnitActive() {
-			if out, err := executeCommand("hostapd_cli -i ap0 reload"); err != nil {
+			if out, err := executeArgv("hostapd_cli", "-i", "ap0", "reload"); err != nil {
 				log.Printf("Warning: hostapd_cli reload (setup limit): %v (%s)", err, strings.TrimSpace(out))
 			}
 		}
@@ -79,10 +79,10 @@ func writeSingleClientLimitConfigs(enable bool) error {
 }
 
 func restartAPNetworkServices() {
-	if out, err := executeCommand("systemctl restart hostapd"); err != nil {
+	if out, err := executeArgv("systemctl", "restart", "hostapd"); err != nil {
 		log.Printf("Warning: restart hostapd: %v (%s)", err, strings.TrimSpace(out))
 	}
-	if out, err := executeCommand("systemctl restart dnsmasq"); err != nil {
+	if out, err := executeArgv("systemctl", "restart", "dnsmasq"); err != nil {
 		log.Printf("Warning: restart dnsmasq: %v (%s)", err, strings.TrimSpace(out))
 	}
 }
@@ -100,15 +100,15 @@ func EnsureAPRunningForSetup() {
 	}
 	log.Printf("Setup pendiente: recuperando AP hostberry para el wizard")
 	if wifi.RecoverSetupAPIfNeeded(constants.DefaultWiFiInterface) {
-		if out, err := executeCommand("systemctl start dnsmasq"); err != nil {
+		if out, err := executeArgv("systemctl", "start", "dnsmasq"); err != nil {
 			log.Printf("Warning: start dnsmasq en setup: %v (%s)", err, strings.TrimSpace(out))
 		}
 		return
 	}
-	if out, err := executeCommand("systemctl start hostapd"); err != nil {
+	if out, err := executeArgv("systemctl", "start", "hostapd"); err != nil {
 		log.Printf("Warning: start hostapd en setup: %v (%s)", err, strings.TrimSpace(out))
 	}
-	if out, err := executeCommand("systemctl start dnsmasq"); err != nil {
+	if out, err := executeArgv("systemctl", "start", "dnsmasq"); err != nil {
 		log.Printf("Warning: start dnsmasq en setup: %v (%s)", err, strings.TrimSpace(out))
 	}
 }
@@ -133,19 +133,22 @@ func patchConfigFile(path string, mutator func([]byte) ([]byte, error)) error {
 }
 
 func writeConfigFilePrivileged(path string, content []byte) error {
-	tmp := filepath.Join(os.TempDir(), "hostberry-"+filepath.Base(path))
+	tmpF, err := os.CreateTemp("", "hostberry-"+filepath.Base(path)+"-*")
+	if err != nil {
+		return err
+	}
+	tmp := tmpF.Name()
+	tmpF.Close()
+	defer os.Remove(tmp)
 	if err := os.WriteFile(tmp, content, 0644); err != nil {
 		return err
 	}
-	defer os.Remove(tmp)
 
-	cmd := fmt.Sprintf("cp %s %s && chmod 644 %s", tmp, path, path)
-	if out, err := executeCommand(cmd); err != nil {
-		msg := strings.TrimSpace(out)
-		if msg == "" {
-			msg = err.Error()
-		}
-		return fmt.Errorf("%s", msg)
+	if _, err := executeArgv("cp", tmp, path); err != nil {
+		return err
+	}
+	if _, err := executeArgv("chmod", "644", path); err != nil {
+		return err
 	}
 	return nil
 }

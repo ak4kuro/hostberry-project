@@ -2,6 +2,7 @@ package hostapd
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -19,6 +20,39 @@ import (
 // executeCommand delega al helper seguro en internal/utils.
 func executeCommand(cmd string) (string, error) {
 	return utils.ExecuteCommand(cmd)
+}
+
+// executeArgv ejecuta un comando como argv (sin shell) con la misma lógica
+// de sudo/privileged-exec que executeCommand.
+func executeArgv(args ...string) (string, error) {
+	return utils.ExecuteArgv(args...)
+}
+
+// detectPhyName detecta el nombre phy80211 de una interfaz WiFi usando tres
+// métodos: sysfs, `iw dev <iface> info` y `iw list`. Sin pipelines shell.
+func detectPhyName(phyInterface string) string {
+	if b, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/phy80211/name", phyInterface)); err == nil {
+		if name := strings.TrimSpace(string(b)); name != "" {
+			return name
+		}
+	}
+	if iwOut, err := executeArgv("iw", "dev", phyInterface, "info"); err == nil {
+		for _, line := range strings.Split(iwOut, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && fields[0] == "wiphy" {
+				return fields[1]
+			}
+		}
+	}
+	if listOut, err := executeArgv("iw", "list"); err == nil {
+		for _, line := range strings.Split(listOut, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && fields[0] == "Wiphy" {
+				return fields[1]
+			}
+		}
+	}
+	return ""
 }
 
 // strconvAtoiSafe wrapper para el paquete main -> internal/utils.
@@ -188,17 +222,21 @@ func HostapdClientsHandler(c *fiber.Ctx) error {
 
 func HostapdCreateAp0Handler(c *fiber.Ctx) error {
 	phyInterface := "wlan0"
-	interfacesResp, _ := executeCommand("ip link show | grep -E '^[0-9]+: wlan' | awk -F: '{print $2}' | awk '{print $1}' | head -1")
-	if t := strings.TrimSpace(interfacesResp); t != "" {
-		phyInterface = t
+	if linkOut, err := executeArgv("ip", "link"); err == nil {
+		for _, line := range strings.Split(linkOut, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 && strings.HasPrefix(fields[1], "wlan") {
+				phyInterface = strings.TrimSuffix(fields[1], ":")
+				break
+			}
+		}
 	}
 	phyInterface = sanitizeIfaceOrDefault(phyInterface, "wlan0")
 
 	log.Printf("Creating ap0 interface from %s", phyInterface)
 
-	ap0CheckCmd := "ip link show ap0 2>/dev/null"
 	ap0Exists := false
-	if out, err := executeCommand(ap0CheckCmd); err == nil && strings.TrimSpace(out) != "" {
+	if out, err := executeArgv("ip", "link", "show", "ap0"); err == nil && strings.TrimSpace(out) != "" {
 		ap0Exists = true
 		log.Printf("Interface ap0 already exists")
 		return c.JSON(fiber.Map{
@@ -208,25 +246,10 @@ func HostapdCreateAp0Handler(c *fiber.Ctx) error {
 		})
 	}
 
-	executeCommand(fmt.Sprintf("sudo ip link set %s up 2>/dev/null || true", phyInterface))
+	_, _ = executeArgv("ip", "link", "set", phyInterface, "up")
 	time.Sleep(500 * time.Millisecond)
 
-	phyName := ""
-	phyCmd2 := fmt.Sprintf("cat /sys/class/net/%s/phy80211/name 2>/dev/null", phyInterface)
-	phyOut2, _ := executeCommand(phyCmd2)
-	phyName = strings.TrimSpace(phyOut2)
-
-	if phyName == "" {
-		phyCmd := fmt.Sprintf("iw dev %s info 2>/dev/null | grep 'wiphy' | awk '{print $2}'", phyInterface)
-		phyOut, _ := executeCommand(phyCmd)
-		phyName = strings.TrimSpace(phyOut)
-	}
-
-	if phyName == "" {
-		phyCmd3 := "iw list 2>/dev/null | grep 'Wiphy' | head -1 | awk '{print $2}'"
-		phyOut3, _ := executeCommand(phyCmd3)
-		phyName = strings.TrimSpace(phyOut3)
-	}
+	phyName := detectPhyName(phyInterface)
 
 	if phyName == "" {
 		phyName = "phy0"
@@ -239,15 +262,14 @@ func HostapdCreateAp0Handler(c *fiber.Ctx) error {
 
 	log.Printf("Detected phy name: %s for interface %s", phyName, phyInterface)
 
-	delOut, _ := executeCommand("sudo iw dev ap0 del 2>/dev/null || true")
+	delOut, _ := executeArgv("iw", "dev", "ap0", "del")
 	if delOut != "" {
 		log.Printf("Removed existing ap0 interface (if it existed): %s", strings.TrimSpace(delOut))
 	}
 	time.Sleep(1 * time.Second)
 
-	createApCmd := fmt.Sprintf("sudo iw phy %s interface add ap0 type __ap 2>&1", phyName)
-	log.Printf("Executing: %s", createApCmd)
-	createOut, createErr := executeCommand(createApCmd)
+	log.Printf("Executing: iw phy %s interface add ap0 type __ap", phyName)
+	createOut, createErr := executeArgv("iw", "phy", phyName, "interface", "add", "ap0", "type", "__ap")
 	if createOut != "" {
 		log.Printf("Command output: %s", strings.TrimSpace(createOut))
 	}
@@ -256,9 +278,8 @@ func HostapdCreateAp0Handler(c *fiber.Ctx) error {
 		log.Printf("Error creating ap0 with phy %s: %s", phyName, strings.TrimSpace(createOut))
 		log.Printf("Trying alternative method: using interface %s directly...", phyInterface)
 
-		createApCmd2 := fmt.Sprintf("sudo iw dev %s interface add ap0 type __ap 2>&1", phyInterface)
-		log.Printf("Executing: %s", createApCmd2)
-		createOut2, createErr2 := executeCommand(createApCmd2)
+		log.Printf("Executing: iw dev %s interface add ap0 type __ap", phyInterface)
+		createOut2, createErr2 := executeArgv("iw", "dev", phyInterface, "interface", "add", "ap0", "type", "__ap")
 		if createOut2 != "" {
 			log.Printf("Method 1 output: %s", strings.TrimSpace(createOut2))
 		}
@@ -283,8 +304,7 @@ func HostapdCreateAp0Handler(c *fiber.Ctx) error {
 
 		verified := false
 		for i := 0; i < 5; i++ {
-			verifyCmd := "ip link show ap0 2>/dev/null"
-			verifyOut, verifyErr := executeCommand(verifyCmd)
+			verifyOut, verifyErr := executeArgv("ip", "link", "show", "ap0")
 			if verifyErr == nil && strings.TrimSpace(verifyOut) != "" {
 				log.Printf("Interface ap0 verified successfully (attempt %d)", i+1)
 				verified = true
@@ -305,7 +325,7 @@ func HostapdCreateAp0Handler(c *fiber.Ctx) error {
 			})
 		} else {
 			log.Printf("SUCCESS: Interface ap0 created and verified")
-			executeCommand("sudo ip link set ap0 up 2>/dev/null || true")
+			_, _ = executeArgv("ip", "link", "set", "ap0", "up")
 			return c.JSON(fiber.Map{
 				"success": true,
 				"message": "Interface ap0 created successfully",
@@ -331,15 +351,15 @@ func HostapdToggleHandler(c *fiber.Ctx) error {
 
 	log.Printf("Current HostAPD status: %s (isActive: %v)", hostapdStatus, isActive)
 
-	var cmdStr string
-	var enableCmd string
+	var cmdArgs []string
+	var enableArgs []string
 	var action string
 
 	if isActive {
 		action = "disable"
-		executeCommand("sudo systemctl stop dnsmasq 2>/dev/null || true")
-		cmdStr = "sudo systemctl stop hostapd"
-		enableCmd = "sudo systemctl disable hostapd 2>/dev/null || true"
+		_, _ = executeArgv("systemctl", "stop", "dnsmasq")
+		cmdArgs = []string{"systemctl", "stop", "hostapd"}
+		enableArgs = []string{"systemctl", "disable", "hostapd"}
 
 	} else {
 		action = "enable"
@@ -366,35 +386,18 @@ func HostapdToggleHandler(c *fiber.Ctx) error {
 			})
 		}
 
-		ap0CheckCmd := "ip link show ap0 2>/dev/null"
 		ap0Exists := false
-		if out, err := executeCommand(ap0CheckCmd); err == nil && strings.TrimSpace(out) != "" {
+		if out, err := executeArgv("ip", "link", "show", "ap0"); err == nil && strings.TrimSpace(out) != "" {
 			ap0Exists = true
 			log.Printf("Interface ap0 already exists")
 		} else {
 			log.Printf("Interface ap0 does not exist, creating it...")
 			phyInterface := ifaceFromHostapdConf(configPath, "wlan0")
 
-			executeCommand(fmt.Sprintf("sudo ip link set %s up 2>/dev/null || true", phyInterface))
+			_, _ = executeArgv("ip", "link", "set", phyInterface, "up")
 			time.Sleep(500 * time.Millisecond)
 
-			phyName := ""
-
-			phyCmd := fmt.Sprintf("iw dev %s info 2>/dev/null | grep 'wiphy' | awk '{print $2}'", phyInterface)
-			phyOut, _ := executeCommand(phyCmd)
-			phyName = strings.TrimSpace(phyOut)
-
-			if phyName == "" {
-				phyCmd2 := fmt.Sprintf("cat /sys/class/net/%s/phy80211/name 2>/dev/null", phyInterface)
-				phyOut2, _ := executeCommand(phyCmd2)
-				phyName = strings.TrimSpace(phyOut2)
-			}
-
-			if phyName == "" {
-				phyCmd3 := "iw list 2>/dev/null | grep -A 1 'Wiphy' | tail -1 | awk '{print $2}'"
-				phyOut3, _ := executeCommand(phyCmd3)
-				phyName = strings.TrimSpace(phyOut3)
-			}
+			phyName := detectPhyName(phyInterface)
 
 			if phyName == "" {
 				phyName = "phy0"
@@ -408,15 +411,15 @@ func HostapdToggleHandler(c *fiber.Ctx) error {
 
 			log.Printf("Creating ap0 interface using phy %s from interface %s...", phyName, phyInterface)
 
-			executeCommand("sudo iw dev ap0 del 2>/dev/null || true")
+			_, _ = executeArgv("iw", "dev", "ap0", "del")
 			time.Sleep(1 * time.Second)
 
-			createApCmd := fmt.Sprintf("sudo iw phy %s interface add ap0 type __ap", phyName)
-			createOut, createErr := executeCommand(createApCmd)
+			log.Printf("Executing: iw phy %s interface add ap0 type __ap", phyName)
+			createOut, createErr := executeArgv("iw", "phy", phyName, "interface", "add", "ap0", "type", "__ap")
 			if createErr != nil {
 				log.Printf("Warning: Could not create ap0 interface with phy %s: %s", phyName, strings.TrimSpace(createOut))
-				createApCmd2 := fmt.Sprintf("sudo iw dev %s interface add ap0 type __ap", phyInterface)
-				createOut2, createErr2 := executeCommand(createApCmd2)
+				log.Printf("Executing: iw dev %s interface add ap0 type __ap", phyInterface)
+				createOut2, createErr2 := executeArgv("iw", "dev", phyInterface, "interface", "add", "ap0", "type", "__ap")
 				if createErr2 != nil {
 					log.Printf("Warning: Alternative method also failed: %s", strings.TrimSpace(createOut2))
 				} else {
@@ -429,11 +432,10 @@ func HostapdToggleHandler(c *fiber.Ctx) error {
 			}
 
 			if ap0Exists {
-				verifyCmd := "ip link show ap0 2>/dev/null"
-				verifyOut, verifyErr := executeCommand(verifyCmd)
+				verifyOut, verifyErr := executeArgv("ip", "link", "show", "ap0")
 				if verifyErr == nil && strings.TrimSpace(verifyOut) != "" {
 					log.Printf("Interface ap0 verified: %s", strings.TrimSpace(verifyOut))
-					executeCommand("sudo ip link set ap0 up 2>/dev/null || true")
+					_, _ = executeArgv("ip", "link", "set", "ap0", "up")
 					log.Printf("Activated ap0 interface")
 				} else {
 					log.Printf("Warning: ap0 was created but verification failed")
@@ -444,7 +446,7 @@ func HostapdToggleHandler(c *fiber.Ctx) error {
 		maskedStatus := systemctlIsEnabled("hostapd")
 		if strings.Contains(maskedStatus, "masked") {
 			log.Printf("HostAPD service is masked, unmasking...")
-			executeCommand("sudo systemctl unmask hostapd 2>/dev/null || true")
+			_, _ = executeArgv("systemctl", "unmask", "hostapd")
 		}
 
 		configLines := strings.Split(string(configContent), "\n")
@@ -486,42 +488,43 @@ func HostapdToggleHandler(c *fiber.Ctx) error {
 
 			if currentIP == "" {
 				log.Printf("Configuring IP %s on interface %s", gatewayIP, interfaceName)
-				ipCmd := fmt.Sprintf("sudo ip addr add %s/24 dev %s 2>/dev/null || sudo ip addr replace %s/24 dev %s", gatewayIP, interfaceName, gatewayIP, interfaceName)
-				if out, err := executeCommand(ipCmd); err != nil {
-					log.Printf("Warning: Error setting IP on interface: %s", strings.TrimSpace(out))
+				if out, err := executeArgv("ip", "addr", "add", gatewayIP+"/24", "dev", interfaceName); err != nil {
+					if out2, err2 := executeArgv("ip", "addr", "replace", gatewayIP+"/24", "dev", interfaceName); err2 != nil {
+						log.Printf("Warning: Error setting IP on interface: %s", strings.TrimSpace(out+out2))
+					}
 				}
 
-				if out, err := executeCommand(fmt.Sprintf("sudo ip link set %s up", interfaceName)); err != nil {
-					log.Printf("Warning: Error bringing interface up: %s", strings.TrimSpace(out))
+				if out2, err := executeArgv("ip", "link", "set", interfaceName, "up"); err != nil {
+					log.Printf("Warning: Error bringing interface up: %s", strings.TrimSpace(out2))
 				}
 			}
 		}
 
-		executeCommand("sudo systemctl unmask hostapd 2>/dev/null || true")
-		executeCommand("sudo systemctl unmask dnsmasq 2>/dev/null || true")
+		_, _ = executeArgv("systemctl", "unmask", "hostapd")
+		_, _ = executeArgv("systemctl", "unmask", "dnsmasq")
 
-		executeCommand("sudo systemctl daemon-reload 2>/dev/null || true")
+		_, _ = executeArgv("systemctl", "daemon-reload")
 
-		enableCmd = "sudo systemctl enable hostapd 2>/dev/null || true"
-		executeCommand("sudo systemctl enable dnsmasq 2>/dev/null || true")
+		enableArgs = []string{"systemctl", "enable", "hostapd"}
+		_, _ = executeArgv("systemctl", "enable", "dnsmasq")
 
-		executeCommand(fmt.Sprintf("sudo chmod 644 %s 2>/dev/null || true", configPath))
+		_, _ = executeArgv("chmod", "644", configPath)
 
-		cmdStr = "sudo systemctl start hostapd"
-		executeCommand("sudo systemctl start dnsmasq 2>/dev/null || true")
+		cmdArgs = []string{"systemctl", "start", "hostapd"}
+		_, _ = executeArgv("systemctl", "start", "dnsmasq")
 	}
 
-	log.Printf("Action: %s, Command: %s", action, cmdStr)
+	log.Printf("Action: %s, Command: %s", action, strings.Join(cmdArgs, " "))
 
-	if enableCmd != "" {
-		if out, err := executeCommand(enableCmd); err != nil {
+	if len(enableArgs) > 0 {
+		if out, err := executeArgv(enableArgs...); err != nil {
 			log.Printf("Warning: Error enabling/disabling hostapd: %s", strings.TrimSpace(out))
 		} else {
 			log.Printf("Enable/disable command executed successfully: %s", strings.TrimSpace(out))
 		}
 	}
 
-	out, err := executeCommand(cmdStr)
+	out, err := executeArgv(cmdArgs...)
 	if err != nil {
 		log.Printf("Error executing %s command: %s", action, strings.TrimSpace(out))
 
@@ -658,11 +661,11 @@ func HostapdToggleHandler(c *fiber.Ctx) error {
 }
 
 func HostapdRestartHandler(c *fiber.Ctx) error {
-	out1, err1 := executeCommand("sudo systemctl stop hostapd")
+	out1, err1 := executeArgv("systemctl", "stop", "hostapd")
 
 	time.Sleep(500 * time.Millisecond)
 
-	out2, err2 := executeCommand("sudo systemctl start hostapd")
+	out2, err2 := executeArgv("systemctl", "start", "hostapd")
 
 	if err1 != nil || err2 != nil {
 		return c.Status(500).JSON(fiber.Map{
@@ -721,17 +724,27 @@ func HostapdDiagnosticsHandler(c *fiber.Ctx) error {
 	}
 	diagnostics["interface"] = interfaceName
 
-	iwCmd := fmt.Sprintf("iw dev %s info 2>/dev/null | grep -i 'type AP' || iwconfig %s 2>/dev/null | grep -i 'mode:master' || echo ''", interfaceName, interfaceName)
-	iwOut, _ := executeCommand(iwCmd)
-	iwStatus := strings.TrimSpace(iwOut)
+	// Detectar modo AP: `iw dev <iface> info` (type AP) o iwconfig (mode:master).
+	iwStatus := ""
+	if iwOut, err := executeArgv("iw", "dev", interfaceName, "info"); err == nil {
+		if strings.Contains(strings.ToLower(iwOut), "type ap") {
+			iwStatus = iwOut
+		}
+	}
+	if iwStatus == "" {
+		if iwcOut, err := executeArgv("iwconfig", interfaceName); err == nil {
+			if strings.Contains(strings.ToLower(iwcOut), "mode:master") {
+				iwStatus = iwcOut
+			}
+		}
+	}
 	transmitting := iwStatus != ""
 
 	if !transmitting && serviceRunning {
-		cliCmd := fmt.Sprintf("hostapd_cli -i %s status 2>/dev/null | grep -i 'state=ENABLED' || echo ''", interfaceName)
-		cliStatusOut, _ := executeCommand(cliCmd)
-		cliStatus := strings.TrimSpace(cliStatusOut)
-		if cliStatus != "" {
-			transmitting = true
+		if cliOut, err := executeArgv("hostapd_cli", "-i", interfaceName, "status"); err == nil {
+			if strings.Contains(strings.ToLower(cliOut), "state=enabled") {
+				transmitting = true
+			}
 		}
 	}
 
@@ -764,9 +777,10 @@ func HostapdDiagnosticsHandler(c *fiber.Ctx) error {
 	diagnostics["errors"] = errors
 	diagnostics["has_errors"] = len(errors) > 0
 
-	ipCmd := fmt.Sprintf("ip addr show %s 2>/dev/null | grep -i 'state UP' || echo ''", interfaceName)
-	ipOut, _ := executeCommand(ipCmd)
-	interfaceUp := strings.Contains(strings.ToLower(ipOut), "state up")
+	interfaceUp := false
+	if ipOut, err := executeArgv("ip", "addr", "show", interfaceName); err == nil {
+		interfaceUp = strings.Contains(strings.ToLower(ipOut), "state up")
+	}
 	diagnostics["interface_up"] = interfaceUp
 
 	dnsmasqActive := systemctlIsActive("dnsmasq")
@@ -952,31 +966,10 @@ func HostapdConfigHandler(c *fiber.Ctx) error {
 
 	log.Printf("Configuring AP+STA mode: creating virtual interface %s from %s", apInterface, phyInterface)
 
-	executeCommand(fmt.Sprintf("sudo ip link set %s up 2>/dev/null || true", phyInterface))
+	_, _ = executeArgv("ip", "link", "set", phyInterface, "up")
 	time.Sleep(500 * time.Millisecond)
 
-	phyName := ""
-	phyCmd2 := fmt.Sprintf("cat /sys/class/net/%s/phy80211/name 2>/dev/null", phyInterface)
-	phyOut2, _ := executeCommand(phyCmd2)
-	phyName = strings.TrimSpace(phyOut2)
-
-	if phyName == "" {
-		phyCmd := fmt.Sprintf("iw dev %s info 2>/dev/null | grep 'wiphy' | awk '{print $2}'", phyInterface)
-		phyOut, _ := executeCommand(phyCmd)
-		phyName = strings.TrimSpace(phyOut)
-	}
-
-	if phyName == "" {
-		phyCmd3 := fmt.Sprintf("iw phy | grep -B 5 '%s' | grep 'Wiphy' | awk '{print $2}' | head -1", phyInterface)
-		phyOut3, _ := executeCommand(phyCmd3)
-		phyName = strings.TrimSpace(phyOut3)
-	}
-
-	if phyName == "" {
-		phyCmd4 := "iw list 2>/dev/null | grep 'Wiphy' | head -1 | awk '{print $2}'"
-		phyOut4, _ := executeCommand(phyCmd4)
-		phyName = strings.TrimSpace(phyOut4)
-	}
+	phyName := detectPhyName(phyInterface)
 
 	if phyName == "" {
 		if strings.HasPrefix(phyInterface, "wlan") {
@@ -999,9 +992,8 @@ func HostapdConfigHandler(c *fiber.Ctx) error {
 	log.Printf("Detected phy name: %s for interface %s", phyName, phyInterface)
 
 	macAddress := ""
-	macPath := fmt.Sprintf("/sys/class/net/%s/address", phyInterface)
-	if macOut, err := exec.Command("cat", macPath).Output(); err == nil {
-		macAddress = strings.TrimSpace(string(macOut))
+	if b, err := os.ReadFile(fmt.Sprintf("/sys/class/net/%s/address", phyInterface)); err == nil {
+		macAddress = strings.TrimSpace(string(b))
 	}
 	if macAddress == "" {
 		log.Printf("Warning: Could not get MAC address for %s", phyInterface)
@@ -1037,11 +1029,13 @@ RUN+="/bin/ip link set ap0 address %s"
 						combinedContent := string(existingContent) + "\n" + udevRuleContent
 						os.WriteFile(tmpUdevFile, []byte(combinedContent), 0644)
 					}
-					executeCommand(fmt.Sprintf("sudo cp %s %s && sudo chmod 644 %s", tmpUdevFile, udevRulePath, udevRulePath))
+					if _, err := executeArgv("cp", tmpUdevFile, udevRulePath); err == nil {
+						_, _ = executeArgv("chmod", "644", udevRulePath)
+					}
 					os.Remove(tmpUdevFile)
 					log.Printf("Created udev rule for automatic ap0 creation (TheWalrus method - Raspberry Pi 3 B+)")
-					executeCommand("sudo udevadm control --reload-rules 2>/dev/null || true")
-					executeCommand("sudo udevadm trigger 2>/dev/null || true")
+					_, _ = executeArgv("udevadm", "control", "--reload-rules")
+					_, _ = executeArgv("udevadm", "trigger")
 				} else {
 					log.Printf("Warning: Could not create udev rule: %v", err)
 				}
@@ -1051,19 +1045,18 @@ RUN+="/bin/ip link set ap0 address %s"
 		}
 	}
 
-	checkApCmd := fmt.Sprintf("ip link show %s 2>/dev/null", apInterface)
 	apExists := false
-	checkOut, checkErr := executeCommand(checkApCmd)
+	checkOut, checkErr := executeArgv("ip", "link", "show", apInterface)
 	if checkErr == nil && strings.TrimSpace(checkOut) != "" {
 		apExists = true
 		log.Printf("Interface %s already exists, reusing it", apInterface)
-		executeCommand(fmt.Sprintf("sudo ip link set %s up 2>/dev/null || true", apInterface))
+		_, _ = executeArgv("ip", "link", "set", apInterface, "up")
 	}
 
 	if !apExists {
 		log.Printf("Interface %s does not exist, creating it...", apInterface)
 
-		delOut, delErr := executeCommand(fmt.Sprintf("sudo iw dev %s del 2>/dev/null || true", apInterface))
+		delOut, delErr := executeArgv("iw", "dev", apInterface, "del")
 		if delErr == nil {
 			log.Printf("Removed existing %s interface (if it existed): %s", apInterface, strings.TrimSpace(delOut))
 		}
@@ -1071,36 +1064,31 @@ RUN+="/bin/ip link set ap0 address %s"
 
 		log.Printf("Creating virtual interface %s using phy %s...", apInterface, phyName)
 
-		phyExistsCmd := fmt.Sprintf("iw phy %s info 2>/dev/null", phyName)
-		phyExistsOut, phyExistsErr := executeCommand(phyExistsCmd)
-		if phyExistsErr != nil || strings.TrimSpace(phyExistsOut) == "" {
-			log.Printf("Warning: phy %s may not exist, output: %s", phyName, strings.TrimSpace(phyExistsOut))
+		phyCheckOut, phyExistsErr := executeArgv("iw", "phy", phyName, "info")
+		if phyExistsErr != nil || strings.TrimSpace(phyCheckOut) == "" {
+			log.Printf("Warning: phy %s may not exist, output: %s", phyName, strings.TrimSpace(phyCheckOut))
 		} else {
 			log.Printf("phy %s exists and is accessible", phyName)
 		}
 
-		phyCheckCmd := fmt.Sprintf("iw phy %s info 2>/dev/null | grep -i 'AP'", phyName)
-		phyCheckOut, _ := executeCommand(phyCheckCmd)
-		if strings.TrimSpace(phyCheckOut) == "" {
+		if !strings.Contains(strings.ToLower(phyCheckOut), "ap") {
 			log.Printf("Warning: phy %s may not support AP mode, but attempting anyway", phyName)
 		} else {
-			log.Printf("phy %s supports AP mode: %s", phyName, strings.TrimSpace(phyCheckOut))
+			log.Printf("phy %s supports AP mode", phyName)
 		}
 
-		iwInfoCmd := fmt.Sprintf("iw dev %s info 2>/dev/null", phyInterface)
-		iwInfoOut, _ := executeCommand(iwInfoCmd)
+		iwInfoOut, _ := executeArgv("iw", "dev", phyInterface, "info")
 		if strings.Contains(iwInfoOut, "type AP") {
 			log.Printf("Warning: Physical interface %s is in AP mode, changing to managed first", phyInterface)
-			executeCommand(fmt.Sprintf("sudo iw dev %s set type managed 2>/dev/null", phyInterface))
+			_, _ = executeArgv("iw", "dev", phyInterface, "set", "type", "managed")
 			time.Sleep(1 * time.Second)
 		}
 
-		executeCommand(fmt.Sprintf("sudo ip link set %s up 2>/dev/null || true", phyInterface))
+		_, _ = executeArgv("ip", "link", "set", phyInterface, "up")
 		time.Sleep(500 * time.Millisecond)
 
-		createApCmd := fmt.Sprintf("sudo iw phy %s interface add %s type __ap 2>&1", phyName, apInterface)
-		log.Printf("Executing: %s", createApCmd)
-		createOut, createErr := executeCommand(createApCmd)
+		log.Printf("Executing: iw phy %s interface add %s type __ap", phyName, apInterface)
+		createOut, createErr := executeArgv("iw", "phy", phyName, "interface", "add", apInterface, "type", "__ap")
 		if createOut != "" {
 			log.Printf("Command output: %s", strings.TrimSpace(createOut))
 		}
@@ -1110,9 +1098,8 @@ RUN+="/bin/ip link set ap0 address %s"
 			log.Printf("Error details: %v", createErr)
 			log.Printf("Trying alternative method 1: using interface %s directly...", phyInterface)
 
-			createApCmd2 := fmt.Sprintf("sudo iw dev %s interface add %s type __ap 2>&1", phyInterface, apInterface)
-			log.Printf("Executing: %s", createApCmd2)
-			createOut2, createErr2 := executeCommand(createApCmd2)
+			log.Printf("Executing: iw dev %s interface add %s type __ap", phyInterface, apInterface)
+			createOut2, createErr2 := executeArgv("iw", "dev", phyInterface, "interface", "add", apInterface, "type", "__ap")
 			if createOut2 != "" {
 				log.Printf("Method 1 output: %s", strings.TrimSpace(createOut2))
 			}
@@ -1121,9 +1108,8 @@ RUN+="/bin/ip link set ap0 address %s"
 				log.Printf("Error with alternative method 1: %s", strings.TrimSpace(createOut2))
 				log.Printf("Trying alternative method 2: using iw phy without sudo...")
 
-				createApCmd3 := fmt.Sprintf("iw phy %s interface add %s type __ap 2>&1", phyName, apInterface)
-				log.Printf("Executing: %s", createApCmd3)
-				createOut3, createErr3 := executeCommand(createApCmd3)
+				log.Printf("Executing: iw phy %s interface add %s type __ap", phyName, apInterface)
+				createOut3, createErr3 := executeArgv("iw", "phy", phyName, "interface", "add", apInterface, "type", "__ap")
 				if createOut3 != "" {
 					log.Printf("Method 2 output: %s", strings.TrimSpace(createOut3))
 				}
@@ -1132,33 +1118,36 @@ RUN+="/bin/ip link set ap0 address %s"
 					log.Printf("Error with alternative method 2: %s", strings.TrimSpace(createOut3))
 					log.Printf("Trying alternative method 3: using mac80211_hwsim if available...")
 
-					phyListCmd := "iw phy 2>/dev/null | grep 'Wiphy' | awk '{print $2}'"
-					phyListOut, _ := executeCommand(phyListCmd)
-					log.Printf("Available phys: %s", strings.TrimSpace(phyListOut))
-					altPhyName := strings.TrimSpace(phyListOut)
-					if altPhyName != "" && altPhyName != phyName {
-						phyLines := strings.Split(altPhyName, "\n")
-						if len(phyLines) > 0 {
-							altPhyName = strings.TrimSpace(phyLines[0])
+					altPhys := []string{}
+					if phyListOut, _ := executeArgv("iw", "phy"); phyListOut != "" {
+						for _, line := range strings.Split(phyListOut, "\n") {
+							fields := strings.Fields(line)
+							if len(fields) >= 2 && fields[0] == "Wiphy" {
+								altPhys = append(altPhys, fields[1])
+							}
 						}
-						if altPhyName != "" && altPhyName != phyName {
-							log.Printf("Trying with alternative phy: %s", altPhyName)
-							createApCmd4 := fmt.Sprintf("sudo iw phy %s interface add %s type __ap 2>&1", altPhyName, apInterface)
-							log.Printf("Executing: %s", createApCmd4)
-							createOut4, createErr4 := executeCommand(createApCmd4)
-							if createOut4 != "" {
-								log.Printf("Method 3 output: %s", strings.TrimSpace(createOut4))
-							}
-							if createErr4 == nil {
-								log.Printf("Successfully created interface %s using alternative phy %s", apInterface, altPhyName)
-								apExists = true
-								phyName = altPhyName // Actualizar phyName para uso posterior
-							} else {
-								log.Printf("Error with alternative phy: %s", strings.TrimSpace(createOut4))
-								apInterface = phyInterface
-								log.Printf("Falling back to using physical interface %s directly (non-concurrent mode)", apInterface)
-							}
+					}
+					log.Printf("Available phys: %s", strings.Join(altPhys, ", "))
+					altPhyName := ""
+					for _, p := range altPhys {
+						if p != phyName {
+							altPhyName = p
+							break
+						}
+					}
+					if altPhyName != "" {
+						log.Printf("Trying with alternative phy: %s", altPhyName)
+						log.Printf("Executing: iw phy %s interface add %s type __ap", altPhyName, apInterface)
+						createOut4, createErr4 := executeArgv("iw", "phy", altPhyName, "interface", "add", apInterface, "type", "__ap")
+						if createOut4 != "" {
+							log.Printf("Method 3 output: %s", strings.TrimSpace(createOut4))
+						}
+						if createErr4 == nil {
+							log.Printf("Successfully created interface %s using alternative phy %s", apInterface, altPhyName)
+							apExists = true
+							phyName = altPhyName // Actualizar phyName para uso posterior
 						} else {
+							log.Printf("Error with alternative phy: %s", strings.TrimSpace(createOut4))
 							apInterface = phyInterface
 							log.Printf("Falling back to using physical interface %s directly (non-concurrent mode)", apInterface)
 						}
@@ -1184,25 +1173,19 @@ RUN+="/bin/ip link set ap0 address %s"
 
 			verified := false
 			for i := 0; i < 5; i++ {
-				verifyCmd := fmt.Sprintf("ip link show %s 2>/dev/null", apInterface)
-				verifyOut, verifyErr := executeCommand(verifyCmd)
-				if verifyErr == nil && strings.TrimSpace(verifyOut) != "" {
+				if verifyOut, verifyErr := executeArgv("ip", "link", "show", apInterface); verifyErr == nil && strings.TrimSpace(verifyOut) != "" {
 					log.Printf("Interface %s verified successfully with ip link (attempt %d)", apInterface, i+1)
 					verified = true
 					break
 				}
 
-				lsCmd := fmt.Sprintf("ls /sys/class/net/ 2>/dev/null | grep -q '^%s$' && echo 'exists'", apInterface)
-				lsOut, _ := executeCommand(lsCmd)
-				if strings.TrimSpace(lsOut) == "exists" {
-					log.Printf("Interface %s verified successfully with ls /sys/class/net (attempt %d)", apInterface, i+1)
+				if _, err := os.Stat(fmt.Sprintf("/sys/class/net/%s", apInterface)); err == nil {
+					log.Printf("Interface %s verified successfully with sysfs (attempt %d)", apInterface, i+1)
 					verified = true
 					break
 				}
 
-				iwListCmd := fmt.Sprintf("iw dev 2>/dev/null | grep -q 'Interface %s' && echo 'exists'", apInterface)
-				iwListOut, _ := executeCommand(iwListCmd)
-				if strings.TrimSpace(iwListOut) == "exists" {
+				if iwDevOut, _ := executeArgv("iw", "dev"); strings.Contains(iwDevOut, "Interface "+apInterface) {
 					log.Printf("Interface %s verified successfully with iw dev (attempt %d)", apInterface, i+1)
 					verified = true
 					break
@@ -1222,8 +1205,11 @@ RUN+="/bin/ip link set ap0 address %s"
 				log.Printf("  - MAC address: %s", macAddress)
 
 				log.Printf("Attempting manual creation as last resort...")
-				manualCmd := fmt.Sprintf("sudo iw phy %s interface add %s type __ap 2>&1; sleep 1; ip link show %s 2>&1", phyName, apInterface, apInterface)
-				manualOut, _ := executeCommand(manualCmd)
+				manualOut, _ := executeArgv("iw", "phy", phyName, "interface", "add", apInterface, "type", "__ap")
+				time.Sleep(1 * time.Second)
+				if linkOut, _ := executeArgv("ip", "link", "show", apInterface); linkOut != "" {
+					manualOut += "\n" + linkOut
+				}
 				log.Printf("Manual creation result: %s", strings.TrimSpace(manualOut))
 			} else {
 				log.Printf("SUCCESS: Interface %s created and verified", apInterface)
@@ -1231,24 +1217,25 @@ RUN+="/bin/ip link set ap0 address %s"
 		}
 	}
 
-	ipCmd := fmt.Sprintf("sudo ip addr add %s/24 dev %s 2>/dev/null || sudo ip addr replace %s/24 dev %s", req.Gateway, apInterface, req.Gateway, apInterface)
-	if out, err := executeCommand(ipCmd); err != nil {
-		log.Printf("Warning: Error setting IP on interface %s: %s", apInterface, strings.TrimSpace(out))
+	// `ip addr add` falla si la dirección ya existe; `replace` la actualiza.
+	if out, err := executeArgv("ip", "addr", "add", req.Gateway+"/24", "dev", apInterface); err != nil {
+		if out2, err2 := executeArgv("ip", "addr", "replace", req.Gateway+"/24", "dev", apInterface); err2 != nil {
+			log.Printf("Warning: Error setting IP on interface %s: %s", apInterface, strings.TrimSpace(out+out2))
+		}
 	}
 
-	if out, err := executeCommand(fmt.Sprintf("sudo ip link set %s up", apInterface)); err != nil {
+	if out, err := executeArgv("ip", "link", "set", apInterface, "up"); err != nil {
 		log.Printf("Warning: Error bringing interface %s up: %s", apInterface, strings.TrimSpace(out))
 	} else {
 		log.Printf("Successfully created and activated virtual interface %s", apInterface)
-		checkCmd := fmt.Sprintf("ip link show %s", apInterface)
-		if checkOut, checkErr := executeCommand(checkCmd); checkErr == nil {
+		if checkOut, checkErr := executeArgv("ip", "link", "show", apInterface); checkErr == nil {
 			log.Printf("Interface %s verified: %s", apInterface, strings.TrimSpace(checkOut))
 		}
 	}
 
 	configPath := "/etc/hostapd/hostapd.conf"
 
-	executeCommand("sudo mkdir -p /etc/hostapd 2>/dev/null || true")
+	_, _ = executeArgv("mkdir", "-p", "/etc/hostapd")
 
 	configContent := renderLegacyHostapdConfig(req, apInterface, auth.IsInitialSetupPending())
 
@@ -1301,10 +1288,10 @@ RUN+="/bin/ip link set ap0 address %s"
 	}
 
 	log.Printf("Ensuring /etc/hostapd directory exists...")
-	if out, err := executeCommand("sudo mkdir -p /etc/hostapd"); err != nil {
+	if out, err := executeArgv("mkdir", "-p", "/etc/hostapd"); err != nil {
 		log.Printf("Warning: Error creating /etc/hostapd directory: %v, output: %s", err, out)
 	}
-	if out, err := executeCommand("sudo chmod 755 /etc/hostapd"); err != nil {
+	if out, err := executeArgv("chmod", "755", "/etc/hostapd"); err != nil {
 		log.Printf("Warning: Error setting permissions on /etc/hostapd: %v, output: %s", err, out)
 	}
 
@@ -1318,9 +1305,8 @@ RUN+="/bin/ip link set ap0 address %s"
 
 	os.Chmod(tmpFile, 0644)
 
-	cmdStr := fmt.Sprintf("sudo cp %s %s", tmpFile, configPath)
-	log.Printf("Executing: %s", cmdStr)
-	out, err := executeCommand(cmdStr)
+	log.Printf("Executing: cp %s %s", tmpFile, configPath)
+	out, err := executeArgv("cp", tmpFile, configPath)
 	if err != nil {
 		log.Printf("Error copying config file: %v, output: '%s'", err, out)
 		os.Remove(tmpFile) // Limpiar archivo temporal
@@ -1335,9 +1321,8 @@ RUN+="/bin/ip link set ap0 address %s"
 	}
 	log.Printf("File copied successfully, output: '%s'", strings.TrimSpace(out))
 
-	chmodCmd := fmt.Sprintf("sudo chmod 644 %s", configPath)
-	log.Printf("Setting permissions: %s", chmodCmd)
-	if out, err := executeCommand(chmodCmd); err != nil {
+	log.Printf("Setting permissions on %s", configPath)
+	if out, err := executeArgv("chmod", "644", configPath); err != nil {
 		log.Printf("Warning: Error setting permissions: %v, output: %s", err, strings.TrimSpace(out))
 	}
 
@@ -1355,7 +1340,7 @@ RUN+="/bin/ip link set ap0 address %s"
 	os.Remove(tmpFile)
 
 	dnsmasqConfigPath := "/etc/dnsmasq.conf"
-	executeCommand(fmt.Sprintf("sudo cp %s %s.backup 2>/dev/null || true", dnsmasqConfigPath, dnsmasqConfigPath))
+	_, _ = executeArgv("cp", dnsmasqConfigPath, dnsmasqConfigPath+".backup")
 
 	dhcpStart := req.DHCPRangeStart
 	dhcpEnd := req.DHCPRangeEnd
@@ -1404,27 +1389,49 @@ dhcp-option=114,http://%s/api/captive-portal
 	}
 
 	os.Chmod(tmpDnsmasqFile, 0644)
-	cmdStr2 := fmt.Sprintf("sudo cp %s %s && sudo chmod 644 %s", tmpDnsmasqFile, dnsmasqConfigPath, dnsmasqConfigPath)
-	if out, err := executeCommand(cmdStr2); err != nil {
+	if _, err := executeArgv("cp", tmpDnsmasqFile, dnsmasqConfigPath); err != nil {
 		os.Remove(tmpDnsmasqFile) // Limpiar archivo temporal
-		log.Printf("Error writing dnsmasq config file: %s, output: %s", err, strings.TrimSpace(out))
+		log.Printf("Error writing dnsmasq config file: %s", err)
 		return c.Status(500).JSON(fiber.Map{
-			"error":   fmt.Sprintf("Error saving dnsmasq configuration: %s", strings.TrimSpace(out)),
+			"error":   fmt.Sprintf("Error saving dnsmasq configuration: %s", err),
 			"success": false,
 		})
 	}
+	_, _ = executeArgv("chmod", "644", dnsmasqConfigPath)
 
 	os.Remove(tmpDnsmasqFile)
 
-	executeCommand("echo 1 | sudo tee /proc/sys/net/ipv4/ip_forward > /dev/null")
-	executeCommand("sudo sysctl -w net.ipv4.ip_forward=1 > /dev/null 2>&1")
+	// `sysctl -w` ya escribe /proc/sys/net/ipv4/ip_forward; el `echo|tee` era redundante.
+	_, _ = executeArgv("sysctl", "-w", "net.ipv4.ip_forward=1")
 
-	sysctlCheckCmd := "grep -q '^net.ipv4.ip_forward=1' /etc/sysctl.conf || echo 'net.ipv4.ip_forward=1' | sudo tee -a /etc/sysctl.conf > /dev/null"
-	executeCommand(sysctlCheckCmd)
+	// Persistir en /etc/sysctl.conf si aún no está (stdin directo, sin shell).
+	if content, err := os.ReadFile("/etc/sysctl.conf"); err == nil &&
+		!strings.Contains(string(content), "net.ipv4.ip_forward=1") {
+		if teeCmd := exec.Command("sudo", "tee", "-a", "/etc/sysctl.conf"); teeCmd != nil {
+			teeCmd.Stdin = strings.NewReader("net.ipv4.ip_forward=1\n")
+			teeCmd.Stdout = io.Discard
+			teeCmd.Stderr = io.Discard
+			_ = teeCmd.Run()
+		}
+	}
 
 	mainInterface := "eth0"
-	if out, _ := executeCommand("ip route | grep default | awk '{print $5}' | head -1"); strings.TrimSpace(out) != "" {
-		mainInterface = strings.TrimSpace(out)
+	if routeOut, _ := executeArgv("ip", "route"); routeOut != "" {
+		for _, line := range strings.Split(routeOut, "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 || fields[0] != "default" {
+				continue
+			}
+			for i := 1; i+1 < len(fields); i++ {
+				if fields[i] == "dev" {
+					mainInterface = fields[i+1]
+					break
+				}
+			}
+			if mainInterface != "" {
+				break
+			}
+		}
 	}
 
 	apIPBegin := req.Gateway
@@ -1433,19 +1440,20 @@ dhcp-option=114,http://%s/api/captive-portal
 	}
 
 	if mainInterface != "" && mainInterface != apInterface {
-		executeCommand(fmt.Sprintf("sudo iptables -t nat -D POSTROUTING -s %s.0/24 ! -d %s.0/24 -j MASQUERADE 2>/dev/null || true", apIPBegin, apIPBegin))
-		executeCommand(fmt.Sprintf("sudo iptables -t nat -D POSTROUTING -o %s -j MASQUERADE 2>/dev/null || true", mainInterface))
-		executeCommand(fmt.Sprintf("sudo iptables -D FORWARD -i %s -o %s -j ACCEPT 2>/dev/null || true", apInterface, mainInterface))
-		executeCommand(fmt.Sprintf("sudo iptables -D FORWARD -i %s -o %s -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true", mainInterface, apInterface))
+		// Borrar reglas existentes (los errores se ignoran, como el `|| true` original).
+		_, _ = executeArgv("iptables", "-t", "nat", "-D", "POSTROUTING", "-s", apIPBegin+".0/24", "!", "-d", apIPBegin+".0/24", "-j", "MASQUERADE")
+		_, _ = executeArgv("iptables", "-t", "nat", "-D", "POSTROUTING", "-o", mainInterface, "-j", "MASQUERADE")
+		_, _ = executeArgv("iptables", "-D", "FORWARD", "-i", apInterface, "-o", mainInterface, "-j", "ACCEPT")
+		_, _ = executeArgv("iptables", "-D", "FORWARD", "-i", mainInterface, "-o", apInterface, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT")
 
-		executeCommand(fmt.Sprintf("sudo iptables -t nat -A POSTROUTING -s %s.0/24 ! -d %s.0/24 -j MASQUERADE", apIPBegin, apIPBegin))
-		executeCommand(fmt.Sprintf("sudo iptables -t nat -A POSTROUTING -o %s -j MASQUERADE", mainInterface))
-		executeCommand(fmt.Sprintf("sudo iptables -A FORWARD -i %s -o %s -j ACCEPT", apInterface, mainInterface))
-		executeCommand(fmt.Sprintf("sudo iptables -A FORWARD -i %s -o %s -m state --state RELATED,ESTABLISHED -j ACCEPT", mainInterface, apInterface))
+		_, _ = executeArgv("iptables", "-t", "nat", "-A", "POSTROUTING", "-s", apIPBegin+".0/24", "!", "-d", apIPBegin+".0/24", "-j", "MASQUERADE")
+		_, _ = executeArgv("iptables", "-t", "nat", "-A", "POSTROUTING", "-o", mainInterface, "-j", "MASQUERADE")
+		_, _ = executeArgv("iptables", "-A", "FORWARD", "-i", apInterface, "-o", mainInterface, "-j", "ACCEPT")
+		_, _ = executeArgv("iptables", "-A", "FORWARD", "-i", mainInterface, "-o", apInterface, "-m", "state", "--state", "RELATED,ESTABLISHED", "-j", "ACCEPT")
 	}
 
 	overrideDir := "/etc/systemd/system/hostapd.service.d"
-	executeCommand(fmt.Sprintf("sudo mkdir -p %s 2>/dev/null || true", overrideDir))
+	_, _ = executeArgv("mkdir", "-p", overrideDir)
 	overrideContent := fmt.Sprintf(`[Service]
 ExecStart=
 ExecStart=/usr/sbin/hostapd -B -P /run/hostapd.pid %s
@@ -1464,10 +1472,10 @@ Type=forking
 		} else {
 			overridePath := fmt.Sprintf("%s/override.conf", overrideDir)
 			os.Chmod(tmpOverrideFile, 0644)
-			cmdStr3 := fmt.Sprintf("sudo cp %s %s && sudo chmod 644 %s", tmpOverrideFile, overridePath, overridePath)
-			if out, err := executeCommand(cmdStr3); err != nil {
-				log.Printf("Warning: Error writing override file: %s, output: %s", err, strings.TrimSpace(out))
+			if _, err := executeArgv("cp", tmpOverrideFile, overridePath); err != nil {
+				log.Printf("Warning: Error writing override file: %s", err)
 			} else {
+				_, _ = executeArgv("chmod", "644", overridePath)
 				log.Printf("Override file created successfully")
 			}
 			os.Remove(tmpOverrideFile)
@@ -1502,7 +1510,9 @@ fi
 		manageTmpF.Close()
 		defer os.Remove(tmpManageAp0)
 		if err := os.WriteFile(tmpManageAp0, []byte(manageAp0Script), 0755); err == nil {
-			executeCommand(fmt.Sprintf("sudo cp %s %s && sudo chmod +x %s", tmpManageAp0, manageAp0Path, manageAp0Path))
+			if _, err := executeArgv("cp", tmpManageAp0, manageAp0Path); err == nil {
+				_, _ = executeArgv("chmod", "+x", manageAp0Path)
+			}
 			os.Remove(tmpManageAp0)
 			log.Printf("Created manage-ap0-iface.sh script")
 		}
@@ -1524,17 +1534,17 @@ TimeoutStopSec=10
 		override2TmpF.Close()
 		defer os.Remove(tmpOverrideFile2)
 		if err := os.WriteFile(tmpOverrideFile2, []byte(overrideContentWithPreStart), 0644); err == nil {
-			cmdStr4 := fmt.Sprintf("sudo cp %s %s && sudo chmod 644 %s", tmpOverrideFile2, overridePath, overridePath)
-			if out, err := executeCommand(cmdStr4); err != nil {
-				log.Printf("Warning: Error updating override file with pre-start: %s, output: %s", err, strings.TrimSpace(out))
+			if _, err := executeArgv("cp", tmpOverrideFile2, overridePath); err != nil {
+				log.Printf("Warning: Error updating override file with pre-start: %s", err)
 			} else {
+				_, _ = executeArgv("chmod", "644", overridePath)
 				log.Printf("Override file updated with pre-start script and PID file configuration")
 			}
 			os.Remove(tmpOverrideFile2)
 		}
 	}
 
-	executeCommand("sudo systemctl daemon-reload")
+	_, _ = executeArgv("systemctl", "daemon-reload")
 
 	apIPBeginForScript := req.Gateway
 	if lastDot := strings.LastIndex(req.Gateway, "."); lastDot > 0 {
@@ -1560,31 +1570,31 @@ wpa_cli -i %s reconfigure 2>/dev/null || true
 		rpiTmpF.Close()
 		defer os.Remove(tmpRpiWifi)
 		if err := os.WriteFile(tmpRpiWifi, []byte(rpiWifiScript), 0755); err == nil {
-			executeCommand(fmt.Sprintf("sudo cp %s %s && sudo chmod +x %s", tmpRpiWifi, rpiWifiPath, rpiWifiPath))
+			if _, err := executeArgv("cp", tmpRpiWifi, rpiWifiPath); err == nil {
+				_, _ = executeArgv("chmod", "+x", rpiWifiPath)
+			}
 			os.Remove(tmpRpiWifi)
 			log.Printf("Created rpi-wifi.sh script")
 		}
 	}
 
-	executeCommand("sudo systemctl enable hostapd 2>/dev/null || true")
-	executeCommand("sudo systemctl enable dnsmasq 2>/dev/null || true")
+	_, _ = executeArgv("systemctl", "enable", "hostapd")
+	_, _ = executeArgv("systemctl", "enable", "dnsmasq")
 
-	if out, err := executeCommand("sudo systemctl restart dnsmasq"); err != nil {
+	if out, err := executeArgv("systemctl", "restart", "dnsmasq"); err != nil {
 		log.Printf("Warning: Error restarting dnsmasq: %s", strings.TrimSpace(out))
 	}
 
 	if apInterface == "ap0" {
-		ap0CheckCmd := "ip link show ap0 2>/dev/null"
-		ap0CheckOut, ap0CheckErr := executeCommand(ap0CheckCmd)
+		ap0CheckOut, ap0CheckErr := executeArgv("ip", "link", "show", "ap0")
 		if ap0CheckErr != nil || strings.TrimSpace(ap0CheckOut) == "" {
 			log.Printf("Warning: ap0 interface does not exist, attempting to create it before starting hostapd")
-			createAp0Cmd := fmt.Sprintf("sudo iw phy %s interface add ap0 type __ap 2>&1", phyName)
-			createAp0Out, _ := executeCommand(createAp0Cmd)
+			createAp0Out, _ := executeArgv("iw", "phy", phyName, "interface", "add", "ap0", "type", "__ap")
 			if createAp0Out != "" {
 				log.Printf("ap0 creation attempt: %s", strings.TrimSpace(createAp0Out))
 			}
 			time.Sleep(1 * time.Second)
-			ap0CheckOut2, _ := executeCommand(ap0CheckCmd)
+			ap0CheckOut2, _ := executeArgv("ip", "link", "show", "ap0")
 			if strings.TrimSpace(ap0CheckOut2) == "" {
 				log.Printf("ERROR: ap0 interface still does not exist after creation attempt")
 				return c.Status(500).JSON(fiber.Map{
@@ -1595,10 +1605,10 @@ wpa_cli -i %s reconfigure 2>/dev/null || true
 		}
 	}
 
-	executeCommand("sudo rm -rf /var/run/hostapd/ap0 2>/dev/null || true")
-	executeCommand("sudo rm -f /run/hostapd.pid 2>/dev/null || true")
+	_, _ = executeArgv("rm", "-rf", "/var/run/hostapd/ap0")
+	_, _ = executeArgv("rm", "-f", "/run/hostapd.pid")
 
-	if out, err := executeCommand("sudo systemctl restart hostapd"); err != nil {
+	if out, err := executeArgv("systemctl", "restart", "hostapd"); err != nil {
 		return c.Status(500).JSON(fiber.Map{
 			"error":   fmt.Sprintf("Configuration saved but failed to restart hostapd: %s", strings.TrimSpace(out)),
 			"success": false,
@@ -1606,17 +1616,20 @@ wpa_cli -i %s reconfigure 2>/dev/null || true
 	}
 
 	time.Sleep(2 * time.Second)
-	hostapdStatusCmd := "systemctl is-active hostapd 2>/dev/null"
-	hostapdStatusOut, _ := executeCommand(hostapdStatusCmd)
+	hostapdStatusOut, _ := executeArgv("systemctl", "is-active", "hostapd")
 	if strings.TrimSpace(hostapdStatusOut) != "active" {
 		log.Printf("Warning: hostapd service may not be active after restart. Status: %s", strings.TrimSpace(hostapdStatusOut))
-		pgrepOut, _ := executeCommand("pgrep hostapd 2>/dev/null && echo 'running' || echo 'not running'")
-		log.Printf("hostapd process check: %s", strings.TrimSpace(pgrepOut))
+		pgrepOut, _ := executeArgv("pgrep", "hostapd")
+		if strings.TrimSpace(pgrepOut) != "" {
+			log.Printf("hostapd process check: running (pid %s)", strings.Fields(pgrepOut)[0])
+		} else {
+			log.Printf("hostapd process check: not running")
+		}
 	}
 
 	// Asegurar que ap0 tenga la IP del gateway y reiniciar dnsmasq para que los clientes reciban IP por DHCP
-	executeCommand("sudo ip addr add 192.168.4.1/24 dev ap0 2>/dev/null || true")
-	if out, err := executeCommand("sudo systemctl restart dnsmasq 2>/dev/null"); err != nil {
+	_, _ = executeArgv("ip", "addr", "replace", "192.168.4.1/24", "dev", "ap0")
+	if out, err := executeArgv("systemctl", "restart", "dnsmasq"); err != nil {
 		log.Printf("Warning: dnsmasq restart after hostapd config: %s", strings.TrimSpace(out))
 	}
 

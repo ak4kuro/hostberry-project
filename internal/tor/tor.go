@@ -39,6 +39,10 @@ func executeCommand(cmd string) (string, error) {
 	return utils.ExecuteCommand(cmd)
 }
 
+func executeArgv(args ...string) (string, error) {
+	return utils.ExecuteArgv(args...)
+}
+
 func isTorInstalled() bool {
 	// Primero: PATH (sin shell).
 	if _, err := exec.LookPath("tor"); err == nil {
@@ -159,9 +163,15 @@ func installTor(user string) map[string]interface{} {
 		return result
 	}
 
-	// Intentar instalar Tor
-	installCmd := "sudo apt-get update && sudo apt-get install -y tor"
-	if out, err := executeCommand(installCmd); err != nil {
+	// Intentar instalar Tor (update + install como argv separados)
+	var out string
+	var err error
+	if _, uerr := executeArgv("apt-get", "update"); uerr == nil {
+		out, err = executeArgv("apt-get", "install", "-y", "tor")
+	} else {
+		err = uerr
+	}
+	if err != nil {
 		// Si falla, intentar con otros métodos (por compatibilidad: devolvemos el error)
 		i18n.LogTf("logs.tor_install_error", err)
 		result["success"] = false
@@ -198,7 +208,7 @@ func configureTor(opts TorConfigOptions) map[string]interface{} {
 	configPath := filepath.Join(configDir, "torrc")
 
 	// Crear directorio si no existe
-	executeCommand(fmt.Sprintf("sudo mkdir -p %s", configDir))
+	_, _ = executeArgv("mkdir", "-p", configDir)
 
 	// Valores por defecto
 	if opts.SocksPort == 0 {
@@ -300,9 +310,11 @@ AvoidDiskWrites 0
 	}
 
 	// Crear directorio de datos y logs
-	executeCommand("sudo mkdir -p /var/lib/tor")
-	executeCommand("sudo mkdir -p /var/log/tor")
-	executeCommand("sudo chown debian-tor:debian-tor /var/lib/tor /var/log/tor 2>/dev/null || sudo chown tor:tor /var/lib/tor /var/log/tor 2>/dev/null || true")
+	_, _ = executeArgv("mkdir", "-p", "/var/lib/tor")
+	_, _ = executeArgv("mkdir", "-p", "/var/log/tor")
+	if _, err := executeArgv("chown", "debian-tor:debian-tor", "/var/lib/tor", "/var/log/tor"); err != nil {
+		_, _ = executeArgv("chown", "tor:tor", "/var/lib/tor", "/var/log/tor")
+	}
 
 	result["success"] = true
 	result["message"] = "Tor configurado correctamente"
@@ -354,8 +366,7 @@ func enableTor(user string) map[string]interface{} {
 	}
 
 	// Iniciar servicio
-	startCmd := "sudo systemctl start tor"
-	if out, err := executeCommand(startCmd); err != nil {
+	if out, err := executeArgv("systemctl", "start", "tor"); err != nil {
 		result["success"] = false
 		result["error"] = fmt.Sprintf("Error iniciando Tor: %v", err)
 		if out != "" {
@@ -366,7 +377,7 @@ func enableTor(user string) map[string]interface{} {
 	}
 
 	// Habilitar para iniciar al arranque
-	executeCommand("sudo systemctl enable tor")
+	_, _ = executeArgv("systemctl", "enable", "tor")
 
 	// Esperar un poco para que Tor se inicie
 	time.Sleep(2 * time.Second)
@@ -387,8 +398,8 @@ func disableTor(user string) map[string]interface{} {
 	i18n.LogTf("logs.tor_disabling", user)
 
 	// Detener servicio
-	executeCommand("sudo systemctl stop tor")
-	executeCommand("sudo systemctl disable tor")
+	_, _ = executeArgv("systemctl", "stop", "tor")
+	_, _ = executeArgv("systemctl", "disable", "tor")
 
 	result["success"] = true
 	result["message"] = "Tor deshabilitado correctamente"

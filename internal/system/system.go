@@ -19,6 +19,10 @@ func executeCommand(cmd string) (string, error) {
 	return utils.ExecuteCommand(cmd)
 }
 
+func executeArgv(args ...string) (string, error) {
+	return utils.ExecuteArgv(args...)
+}
+
 func readFirstMatchCPUInfo() string {
 	b, err := os.ReadFile("/proc/cpuinfo")
 	if err != nil {
@@ -289,29 +293,25 @@ func systemRestart(user string) map[string]interface{} {
 
 	i18n.LogTf("logs.system_restart_requested", user)
 
-	restartCmd := "systemctl reboot"
-	if _, err := executeCommand(restartCmd); err != nil {
+	if _, err := executeArgv("systemctl", "reboot"); err != nil {
 		i18n.LogTf("logs.system_restart_fallback", err)
-		shutdownPaths := []string{"/usr/sbin/shutdown", "/sbin/shutdown", "shutdown"}
 		found := false
-		for _, path := range shutdownPaths {
-			testCmd := fmt.Sprintf("command -v %s 2>/dev/null", path)
-			if testOut, testErr := executeCommand(testCmd); testErr == nil && strings.TrimSpace(testOut) != "" {
-				restartCmd = fmt.Sprintf("%s -r +1", path)
-				if out2, err2 := executeCommand(restartCmd); err2 == nil {
-					result["success"] = true
-					result["message"] = "Sistema se reiniciará en 1 minuto"
-					result["output"] = strings.TrimSpace(out2)
-					i18n.LogT("logs.system_restart_success")
-					return result
-				}
-				found = true
-				break
+		for _, path := range []string{"/usr/sbin/shutdown", "/sbin/shutdown", "shutdown"} {
+			if _, lookErr := exec.LookPath(path); lookErr != nil {
+				continue
 			}
+			if out2, err2 := executeArgv(path, "-r", "+1"); err2 == nil {
+				result["success"] = true
+				result["message"] = "Sistema se reiniciará en 1 minuto"
+				result["output"] = strings.TrimSpace(out2)
+				i18n.LogT("logs.system_restart_success")
+				return result
+			}
+			found = true
+			break
 		}
 		if !found {
-			restartCmd = "reboot"
-			if _, err3 := executeCommand(restartCmd); err3 != nil {
+			if _, err3 := executeArgv("reboot"); err3 != nil {
 				result["success"] = false
 				result["error"] = err3.Error()
 				result["message"] = "Error al ejecutar comando de reinicio"
@@ -346,29 +346,25 @@ func systemShutdown(user string) map[string]interface{} {
 
 	i18n.LogTf("logs.system_shutdown_requested", user)
 
-	shutdownCmd := "systemctl poweroff"
-	if _, err := executeCommand(shutdownCmd); err != nil {
+	if _, err := executeArgv("systemctl", "poweroff"); err != nil {
 		i18n.LogTf("logs.system_shutdown_fallback", err)
-		shutdownPaths := []string{"/usr/sbin/shutdown", "/sbin/shutdown", "shutdown"}
 		found := false
-		for _, path := range shutdownPaths {
-			testCmd := fmt.Sprintf("command -v %s 2>/dev/null", path)
-			if testOut, testErr := executeCommand(testCmd); testErr == nil && strings.TrimSpace(testOut) != "" {
-				shutdownCmd = fmt.Sprintf("%s -h +1", path)
-				if out2, err2 := executeCommand(shutdownCmd); err2 == nil {
-					result["success"] = true
-					result["message"] = "Sistema se apagará en 1 minuto"
-					result["output"] = strings.TrimSpace(out2)
-					i18n.LogT("logs.system_shutdown_success")
-					return result
-				}
-				found = true
-				break
+		for _, path := range []string{"/usr/sbin/shutdown", "/sbin/shutdown", "shutdown"} {
+			if _, lookErr := exec.LookPath(path); lookErr != nil {
+				continue
 			}
+			if out2, err2 := executeArgv(path, "-h", "+1"); err2 == nil {
+				result["success"] = true
+				result["message"] = "Sistema se apagará en 1 minuto"
+				result["output"] = strings.TrimSpace(out2)
+				i18n.LogT("logs.system_shutdown_success")
+				return result
+			}
+			found = true
+			break
 		}
 		if !found {
-			shutdownCmd = "poweroff"
-			if _, err3 := executeCommand(shutdownCmd); err3 != nil {
+			if _, err3 := executeArgv("poweroff"); err3 != nil {
 				result["success"] = false
 				result["error"] = err3.Error()
 				result["message"] = "Error al ejecutar comando de apagado"

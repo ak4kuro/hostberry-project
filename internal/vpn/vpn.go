@@ -45,6 +45,10 @@ func executeCommand(cmd string) (string, error) {
 	return utils.ExecuteCommand(cmd)
 }
 
+func executeArgv(args ...string) (string, error) {
+	return utils.ExecuteArgv(args...)
+}
+
 func readRedactedConfigMetadata(path, vpnName string) map[string]interface{} {
 	result := map[string]interface{}{
 		"success":  true,
@@ -199,8 +203,7 @@ func connectVPN(config, vpnType, user string) map[string]interface{} {
 			return result
 		}
 
-		cmd := "sudo systemctl start openvpn@client"
-		if out, err := executeCommand(cmd); err != nil {
+		if out, err := executeArgv("systemctl", "start", "openvpn@client"); err != nil {
 			result["success"] = false
 			result["error"] = err.Error()
 			if out != "" {
@@ -218,8 +221,7 @@ func connectVPN(config, vpnType, user string) map[string]interface{} {
 			return result
 		}
 
-		cmd := "sudo wg-quick up wg0"
-		if out, err := executeCommand(cmd); err != nil {
+		if out, err := executeArgv("wg-quick", "up", "wg0"); err != nil {
 			result["success"] = false
 			result["error"] = err.Error()
 			if out != "" {
@@ -293,8 +295,8 @@ func configureWireGuard(config, user string) map[string]interface{} {
 	}
 
 	if wgStatusOut, err := wgShow("show", "wg0"); err == nil && wgStatusOut != "" {
-		executeCommand("sudo wg-quick down wg0 2>/dev/null")
-		executeCommand("sudo wg-quick up wg0 2>/dev/null")
+		_, _ = executeArgv("wg-quick", "down", "wg0")
+		_, _ = executeArgv("wg-quick", "up", "wg0")
 		result["message"] = "WireGuard reiniciado con nueva configuración"
 	} else {
 		result["message"] = "Configuración guardada (no activa)"

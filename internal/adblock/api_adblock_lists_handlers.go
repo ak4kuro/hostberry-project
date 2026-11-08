@@ -183,8 +183,10 @@ func updateAdblockHosts() (adblockUpdateStats, error) {
 	}
 
 	stats.Domains = len(domains)
-	if _, err := utils.ExecuteCommand("sudo systemctl reload dnsmasq 2>/dev/null || sudo systemctl restart dnsmasq 2>/dev/null || true"); err != nil {
-		return stats, fmt.Errorf("recargar dnsmasq: %w", err)
+	if _, err := utils.ExecuteArgv("systemctl", "reload", "dnsmasq"); err != nil {
+		if _, err2 := utils.ExecuteArgv("systemctl", "restart", "dnsmasq"); err2 != nil {
+			return stats, fmt.Errorf("recargar dnsmasq: %w", err)
+		}
 	}
 	return stats, nil
 }
@@ -300,9 +302,10 @@ func writeAdblockHostsSection(domains map[string]bool) error {
 	if err := os.WriteFile(tmp, out.Bytes(), 0644); err != nil {
 		return err
 	}
-	if _, err := utils.ExecuteCommand("sudo cp " + tmp + " " + adblockHostsPath + " && sudo chmod 644 " + adblockHostsPath); err != nil {
+	if _, err := utils.ExecuteArgv("cp", tmp, adblockHostsPath); err != nil {
 		return fmt.Errorf("escribir %s: %w", adblockHostsPath, err)
 	}
+	_, _ = utils.ExecuteArgv("chmod", "644", adblockHostsPath)
 	return nil
 }
 
