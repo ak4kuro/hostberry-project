@@ -52,7 +52,7 @@ func RefreshSessionCookieMiddleware(c *fiber.Ctx) error {
 		HTTPOnly: true,
 		SameSite: "Strict",
 		MaxAge:   int(cookieExpiry.Seconds()),
-		Secure:   security.IsHTTPSRequest(c),
+		Secure:   security.IsHTTPSRequest(c) || config.AppConfig.Security.EnforceHTTPS,
 	})
 	return nil
 }

@@ -80,26 +80,9 @@ func iwStationDump(iface string) ([]byte, error) {
 	return utils.ExecCommand(fmt.Sprintf("iw dev %s station dump", iface)).CombinedOutput()
 }
 
+// ifaceIPv4 delega en utils.IPv4OnInterface (argv, sin shell).
 func ifaceIPv4(iface string) string {
-	if validateInterfaceName(iface) != nil {
-		return ""
-	}
-	out, err := utils.ExecCommand(fmt.Sprintf("ip addr show %s", iface)).Output()
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "inet ") {
-			continue
-		}
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		return strings.TrimSpace(strings.SplitN(fields[1], "/", 2)[0])
-	}
-	return ""
+	return utils.IPv4OnInterface(iface)
 }
 
 func dhcpClientRunningForIface(iface string) bool {

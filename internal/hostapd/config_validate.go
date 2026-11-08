@@ -2,6 +2,7 @@ package hostapd
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -47,6 +48,51 @@ func hwModeForChannel(ch int) string {
 		return "a"
 	}
 	return "g"
+}
+
+// renderLegacyHostapdConfig genera el contenido de hostapd.conf para el endpoint
+// single-band /hostapd/config. Función pura: los valores ya vienen validados por
+// validateHostapdPOST y se sanitizan de nuevo por defensa en profundidad.
+func renderLegacyHostapdConfig(req HostapdConfigBody, apInterface string, maxOneClient bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `interface=%s
+driver=nl80211
+ctrl_interface=/run/hostapd
+ctrl_interface_group=0
+ssid=%s
+hw_mode=%s
+channel=%d
+country_code=%s
+ieee80211d=1
+ieee80211n=1
+`, apInterface, sanitizeHostapdConfValue(req.SSID), hwModeForChannel(req.Channel), req.Channel, req.Country)
+	if req.Channel > 14 {
+		b.WriteString("ieee80211ac=1\n")
+	}
+
+	switch req.Security {
+	case "open":
+		b.WriteString("auth_algs=0\n")
+	case "wpa2":
+		fmt.Fprintf(&b, `wpa=2
+wpa_passphrase=%s
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+`, sanitizeHostapdConfValue(req.Password))
+	case "wpa3":
+		fmt.Fprintf(&b, `wpa=2
+wpa_passphrase=%s
+wpa_key_mgmt=WPA-PSK-SHA256
+wpa_pairwise=CCMP
+rsn_pairwise=CCMP
+`, sanitizeHostapdConfValue(req.Password))
+	}
+
+	if maxOneClient {
+		b.WriteString("max_num_sta=1\n")
+	}
+	return b.String()
 }
 
 func respondValidatorError(c *fiber.Ctx, err error) error {

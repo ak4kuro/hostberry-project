@@ -213,4 +213,3 @@ func SystemNotificationsTestEmailHandler(c *fiber.Ctx) error {
 		"message": "Email de prueba enviado.",
 	})
 }
-

@@ -506,6 +506,36 @@ func StrconvAtoiSafe(s string) (int, error) {
 	return n, nil
 }
 
+// IPv4OnInterface devuelve la primera dirección IPv4 de una interfaz usando
+// `ip -o -4 addr show` con argumentos separados (sin shell). Devuelve "" si la
+// interfaz no existe o no tiene IPv4.
+func IPv4OnInterface(iface string) string {
+	if validators.ValidateIfaceName(iface) != nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ip", "-o", "-4", "addr", "show", iface)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		idx := strings.Index(line, "inet ")
+		if idx < 0 {
+			continue
+		}
+		rest := strings.TrimSpace(line[idx+len("inet "):])
+		if i := strings.Index(rest, "/"); i >= 0 {
+			rest = rest[:i]
+		}
+		if ip := strings.TrimSpace(rest); ip != "" {
+			return ip
+		}
+	}
+	return ""
+}
+
 func MapActiveStatus(status string) string {
 	status = strings.ToLower(strings.TrimSpace(status))
 	if status == "active" {

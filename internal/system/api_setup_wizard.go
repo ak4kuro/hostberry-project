@@ -21,8 +21,18 @@ import (
 // o un mensaje de error describiendo el primer parámetro inválido. Si falla, el
 // handler restaura la configuración de fábrica y NO marca el wizard como completado.
 func validateWizardParameters() string {
+	pending, hasPending := wifi.GetWizardPendingWiFi()
+	cfg := wifi.LoadDualBandAPConfig(constants.DefaultCountryCode)
+	return validateWizardInputs(pending, hasPending, cfg)
+}
+
+// validateWizardInputs es la parte pura de validateWizardParameters: recibe la
+// red pendiente y los perfiles AP ya cargados, sin tocar disco ni base de datos.
+// Devuelve "" si todo es correcto o un mensaje de error describiendo el primer
+// parámetro inválido.
+func validateWizardInputs(w wifi.WizardPendingWiFi, hasPending bool, cfg wifi.DualBandAPConfig) string {
 	// 1) Red WiFi upstream pendiente (STA).
-	if w, ok := wifi.GetWizardPendingWiFi(); ok {
+	if hasPending {
 		if err := validators.ValidateSSID(w.SSID); err != nil {
 			return "La red WiFi guardada tiene un nombre (SSID) no válido."
 		}
@@ -54,7 +64,6 @@ func validateWizardParameters() string {
 	}
 
 	// 2) Perfiles del punto de acceso HostBerry (dual-band).
-	cfg := wifi.LoadDualBandAPConfig(constants.DefaultCountryCode)
 	profiles := []struct {
 		name   string
 		prof   wifi.DualBandAPProfile

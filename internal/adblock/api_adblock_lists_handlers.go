@@ -111,24 +111,23 @@ func AdblockDomainsHandler(c *fiber.Ctx) error {
 func AdblockUpdateHandler(c *fiber.Ctx) error {
 	username, userID := adblockCurrentUserInfo(c)
 
-	stats, err := updateAdblockHosts()
-	if err != nil {
-		_ = database.InsertLog("ERROR", database.LogMsgErr("actualizar listas AdBlock", err.Error(), username), "adblock", userID)
-		return c.Status(500).JSON(fiber.Map{
-			"success": false,
-			"error":   "No se pudieron actualizar las listas de AdBlock",
-			"detail":  err.Error(),
-		})
-	}
+	// La descarga de las listas puede tardar minutos: se ejecuta en segundo
+	// plano y el resultado queda en el log de actividad y en adblock_last_update.
+	go func(user string, uid *int) {
+		stats, err := updateAdblockHosts()
+		if err != nil {
+			_ = database.InsertLog("ERROR", database.LogMsgErr("actualizar listas AdBlock", err.Error(), user), "adblock", uid)
+			return
+		}
+		_ = database.SetConfig("adblock_last_update", time.Now().Format(time.RFC3339))
+		_ = database.InsertLog("INFO", database.LogMsg(fmt.Sprintf("Listas AdBlock actualizadas: %d dominios de %d listas", stats.Domains, stats.Lists), user), "adblock", uid)
+	}(username, userID)
 
-	_ = database.SetConfig("adblock_last_update", time.Now().Format(time.RFC3339))
-	_ = database.InsertLog("INFO", database.LogMsg(fmt.Sprintf("Listas AdBlock actualizadas: %d dominios de %d listas", stats.Domains, stats.Lists), username), "adblock", userID)
+	_ = database.InsertLog("INFO", database.LogMsg("Actualización de listas AdBlock iniciada", username), "adblock", userID)
 
 	return c.JSON(fiber.Map{
-		"success":       true,
-		"message":       "Listas de AdBlock actualizadas",
-		"domains_count": stats.Domains,
-		"lists_count":   stats.Lists,
+		"success": true,
+		"message": "Actualización de listas AdBlock iniciada en segundo plano",
 	})
 }
 
@@ -209,8 +208,15 @@ func fetchAdblockListDomains(rawURL string) (map[string]bool, error) {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
+	return parseAdblockListDomains(resp.Body)
+}
+
+// parseAdblockListDomains extrae dominios de un reader con una blocklist.
+// Soporta formato hosts (0.0.0.0/127.0.0.1 dominio) y reglas adblock `||dominio^`.
+// Límite de lectura: adblockMaxListBytes.
+func parseAdblockListDomains(r io.Reader) (map[string]bool, error) {
 	domains := make(map[string]bool)
-	reader := bufio.NewReaderSize(io.LimitReader(resp.Body, adblockMaxListBytes), 64*1024)
+	reader := bufio.NewReaderSize(io.LimitReader(r, adblockMaxListBytes), 64*1024)
 	for {
 		line, err := reader.ReadString('\n')
 		line = strings.TrimSpace(line)
@@ -403,7 +409,7 @@ func getDisabledAdblockLists() map[string]bool {
 	}
 	for _, part := range strings.Split(raw, ",") {
 		key := strings.ToLower(strings.TrimSpace(part))
-		if key != "" {
+		if key != "" && len(key) <= 100 {
 			result[key] = true
 		}
 	}
@@ -427,7 +433,17 @@ func getAdblockDomainOverrides() map[string]bool {
 	if raw == "" {
 		return result
 	}
-	_ = json.Unmarshal([]byte(raw), &result)
+	var parsed map[string]bool
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return result
+	}
+	// Solo conservar entradas con dominio válido: la config puede estar
+	// corrupta o manipulada y no debe propagarse al bloque de /etc/hosts.
+	for domain, blocked := range parsed {
+		if len(domain) <= 255 && adblockDomainRegex.MatchString(domain) {
+			result[strings.ToLower(domain)] = blocked
+		}
+	}
 	return result
 }
 

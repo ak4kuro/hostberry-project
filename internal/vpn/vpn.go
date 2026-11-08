@@ -382,32 +382,9 @@ func wgEndpoints() []string {
 	return endpoints
 }
 
-// ifaceIPv4 devuelve la primera dirección IPv4 de una interfaz.
+// ifaceIPv4 delega en utils.IPv4OnInterface (argv, sin shell).
 func ifaceIPv4(iface string) string {
-	if validators.ValidateIfaceName(iface) != nil {
-		return ""
-	}
-	ctx, cancel := vpnCmdTimeout()
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "ip", "-o", "-4", "addr", "show", iface)
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		idx := strings.Index(line, "inet ")
-		if idx < 0 {
-			continue
-		}
-		rest := strings.TrimSpace(line[idx+5:])
-		if i := strings.Index(rest, "/"); i >= 0 {
-			rest = rest[:i]
-		}
-		if ip := strings.TrimSpace(rest); ip != "" {
-			return ip
-		}
-	}
-	return ""
+	return utils.IPv4OnInterface(iface)
 }
 
 // ---- wrappers exportados ----

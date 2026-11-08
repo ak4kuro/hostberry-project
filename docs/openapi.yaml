@@ -58,6 +58,343 @@ paths:
       security: [{ cookieAuth: [] }]
       responses:
         '200': { description: OK }
+  /wifi/scan:
+    get:
+      summary: Escanear redes WiFi
+      tags: [wifi]
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: interface, in: query, schema: { type: string } }
+        - { name: refresh, in: query, schema: { type: string } }
+        - { name: band, in: query, schema: { type: string, enum: ["2.4", "5"] } }
+      responses:
+        '200': { description: Lista de redes }
+    post:
+      summary: Escanear redes WiFi (POST)
+      tags: [wifi]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: Lista de redes }
+  /wifi/disconnect:
+    post:
+      summary: Desconectar WiFi (admin)
+      tags: [wifi]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /wifi/interfaces:
+    get:
+      summary: Interfaces WiFi disponibles
+      tags: [wifi]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /wifi/toggle:
+    post:
+      summary: Activar/desactivar radio WiFi (admin)
+      tags: [wifi]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /wifi/unblock:
+    post:
+      summary: Desbloquear WiFi (rfkill) (admin)
+      tags: [wifi]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /wifi/software-switch:
+    post:
+      summary: Cambiar entre cliente WiFi y AP (admin)
+      tags: [wifi]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /wifi/setup-info:
+    get:
+      summary: Información para el asistente de configuración
+      tags: [wifi]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /wifi/setup-band:
+    post:
+      summary: Seleccionar banda WiFi en el asistente
+      tags: [wifi]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /network/status:
+    get:
+      summary: Estado de red
+      tags: [network]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /network/interfaces:
+    get:
+      summary: Interfaces de red
+      tags: [network]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /network/routing:
+    get:
+      summary: Tabla de rutas
+      tags: [network]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /network/config:
+    get:
+      summary: Configuración de red
+      tags: [network]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+    post:
+      summary: Guardar configuración de red (admin)
+      tags: [network]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /network/firewall/toggle:
+    post:
+      summary: Alternar firewall (admin)
+      tags: [network]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /vpn/status:
+    get:
+      summary: Estado VPN (OpenVPN/WireGuard)
+      tags: [vpn]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /vpn/connections:
+    get:
+      summary: Conexiones VPN activas
+      tags: [vpn]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /vpn/servers:
+    get:
+      summary: Servidores VPN configurados
+      tags: [vpn]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /vpn/clients:
+    get:
+      summary: Sesión VPN del dispositivo
+      tags: [vpn]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /vpn/toggle:
+    post:
+      summary: Conmutar VPN activa (admin)
+      tags: [vpn]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /vpn/connect:
+    post:
+      summary: Conectar VPN con configuración (admin)
+      tags: [vpn]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /vpn/config:
+    get:
+      summary: Metadatos de configuración OpenVPN (redactada)
+      tags: [vpn]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+    post:
+      summary: Guardar configuración OpenVPN (admin)
+      tags: [vpn]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /vpn/connections/{name}/toggle:
+    post:
+      summary: Conmutar conexión VPN por nombre (admin)
+      tags: [vpn]
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK }
+  /wireguard/status:
+    get:
+      summary: Estado WireGuard
+      tags: [wireguard]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /wireguard/toggle:
+    post:
+      summary: Conmutar WireGuard wg0 (admin)
+      tags: [wireguard]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /hostapd/access-points:
+    get:
+      summary: Puntos de acceso hostapd
+      tags: [hostapd]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /hostapd/config:
+    get:
+      summary: Obtener configuración AP
+      tags: [hostapd]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+    post:
+      summary: Guardar configuración AP single-band (admin)
+      tags: [hostapd]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /hostapd/dual-band:
+    get:
+      summary: Perfiles AP 2.4/5 GHz
+      tags: [hostapd]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+    post:
+      summary: Guardar perfiles AP dual-band (admin)
+      tags: [hostapd]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /hostapd/toggle:
+    post:
+      summary: Conmutar hostapd (admin)
+      tags: [hostapd]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /hostapd/restart:
+    post:
+      summary: Reiniciar hostapd (admin)
+      tags: [hostapd]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/status:
+    get:
+      summary: Estado AdBlock
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/lists:
+    get:
+      summary: Listas de bloqueo
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/domains:
+    get:
+      summary: Dominios bloqueados
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/update:
+    post:
+      summary: Actualizar listas AdBlock (admin, en segundo plano)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: Actualización iniciada }
+  /adblock/enable:
+    post:
+      summary: Activar AdBlock (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/disable:
+    post:
+      summary: Desactivar AdBlock (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /system/stats:
+    get:
+      summary: Estadísticas del sistema
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /system/info:
+    get:
+      summary: Información del sistema
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /system/services:
+    get:
+      summary: Estado de servicios
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /system/logs:
+    get:
+      summary: Logs del sistema
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /system/updates:
+    get:
+      summary: Actualizaciones disponibles
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /system/config:
+    post:
+      summary: Guardar configuración del sistema (admin)
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /tor/status:
+    get:
+      summary: Estado Tor
+      tags: [tor]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /tor/enable:
+    post:
+      summary: Activar Tor (admin)
+      tags: [tor]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /tor/disable:
+    post:
+      summary: Desactivar Tor (admin)
+      tags: [tor]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
   /network/status:
     get:
       summary: Estado de red

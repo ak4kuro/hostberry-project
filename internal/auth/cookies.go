@@ -8,6 +8,13 @@ import (
 	"hostberry/internal/security"
 )
 
+// cookieSecure indica si la cookie debe llevar flag Secure. Además de la
+// petición HTTPS actual, se fuerza cuando enforce_https está activo (toda
+// petición HTTP se redirige a HTTPS de todos modos).
+func cookieSecure(c *fiber.Ctx) bool {
+	return security.IsHTTPSRequest(c) || config.AppConfig.Security.EnforceHTTPS
+}
+
 func setAccessTokenCookie(c *fiber.Ctx, token string) {
 	cookieExpiry := time.Duration(config.AppConfig.Security.TokenExpiry) * time.Minute
 	c.Cookie(&fiber.Cookie{
@@ -17,7 +24,7 @@ func setAccessTokenCookie(c *fiber.Ctx, token string) {
 		HTTPOnly: true,
 		SameSite: "Strict",
 		MaxAge:   int(cookieExpiry.Seconds()),
-		Secure:   security.IsHTTPSRequest(c),
+		Secure:   cookieSecure(c),
 	})
 }
 
@@ -28,7 +35,7 @@ func clearAccessTokenCookie(c *fiber.Ctx) {
 		Path:     "/",
 		HTTPOnly: true,
 		SameSite: "Strict",
-		Secure:   security.IsHTTPSRequest(c),
+		Secure:   cookieSecure(c),
 		MaxAge:   -1,
 	})
 }
