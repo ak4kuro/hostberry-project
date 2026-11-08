@@ -1026,20 +1026,25 @@ RUN+="/sbin/iw phy %s interface add ap0 type __ap", \
 RUN+="/bin/ip link set ap0 address %s"
 `, macAddress, phyName, phyName, macAddress)
 
-			tmpUdevFile := "/tmp/70-persistent-net.rules.tmp"
-			if err := os.WriteFile(tmpUdevFile, []byte(udevRuleContent), 0644); err == nil {
-				if _, err := os.Stat(udevRulePath); err == nil {
-					existingContent, _ := os.ReadFile(udevRulePath)
-					combinedContent := string(existingContent) + "\n" + udevRuleContent
-					os.WriteFile(tmpUdevFile, []byte(combinedContent), 0644)
+			udevTmpF, udevTmpErr := os.CreateTemp("", "hostberry-udev-*")
+			if udevTmpErr == nil {
+				tmpUdevFile := udevTmpF.Name()
+				udevTmpF.Close()
+				defer os.Remove(tmpUdevFile)
+				if err := os.WriteFile(tmpUdevFile, []byte(udevRuleContent), 0644); err == nil {
+					if _, err := os.Stat(udevRulePath); err == nil {
+						existingContent, _ := os.ReadFile(udevRulePath)
+						combinedContent := string(existingContent) + "\n" + udevRuleContent
+						os.WriteFile(tmpUdevFile, []byte(combinedContent), 0644)
+					}
+					executeCommand(fmt.Sprintf("sudo cp %s %s && sudo chmod 644 %s", tmpUdevFile, udevRulePath, udevRulePath))
+					os.Remove(tmpUdevFile)
+					log.Printf("Created udev rule for automatic ap0 creation (TheWalrus method - Raspberry Pi 3 B+)")
+					executeCommand("sudo udevadm control --reload-rules 2>/dev/null || true")
+					executeCommand("sudo udevadm trigger 2>/dev/null || true")
+				} else {
+					log.Printf("Warning: Could not create udev rule: %v", err)
 				}
-				executeCommand(fmt.Sprintf("sudo cp %s %s && sudo chmod 644 %s", tmpUdevFile, udevRulePath, udevRulePath))
-				os.Remove(tmpUdevFile)
-				log.Printf("Created udev rule for automatic ap0 creation (TheWalrus method - Raspberry Pi 3 B+)")
-				executeCommand("sudo udevadm control --reload-rules 2>/dev/null || true")
-				executeCommand("sudo udevadm trigger 2>/dev/null || true")
-			} else {
-				log.Printf("Warning: Could not create udev rule: %v", err)
 			}
 		} else {
 			log.Printf("udev rule for ap0 already exists")
@@ -1247,7 +1252,17 @@ RUN+="/bin/ip link set ap0 address %s"
 
 	configContent := renderLegacyHostapdConfig(req, apInterface, auth.IsInitialSetupPending())
 
-	tmpFile := "/tmp/hostapd.conf.tmp"
+	tmpF, tmpErr := os.CreateTemp("", "hostberry-hostapd-*")
+	if tmpErr != nil {
+		log.Printf("Error creating temporary config file: %v", tmpErr)
+		return c.Status(500).JSON(fiber.Map{
+			"error":   fmt.Sprintf("Error creating temporary config file: %v", tmpErr),
+			"success": false,
+		})
+	}
+	tmpFile := tmpF.Name()
+	tmpF.Close()
+	defer os.Remove(tmpFile)
 	log.Printf("Creating temporary config file: %s", tmpFile)
 	if err := os.WriteFile(tmpFile, []byte(configContent), 0644); err != nil {
 		log.Printf("Error creating temporary config file: %v", err)
@@ -1348,10 +1363,7 @@ RUN+="/bin/ip link set ap0 address %s"
 		dhcpEnd = dhcpStart
 	}
 
-	dnsmasqContent := fmt.Sprintf(`# Configuración de dnsmasq para modo AP+STA según método TheWalrus (Raspberry Pi 3 B+)
-# bind-interfaces: asegura IPv4 en ap0 antes de arrancar dnsmasq (hostberry-dnsmasq-prep-ap0.sh en install.sh).
-# Solo servir DHCP en ap0, no en la interfaz STA
-except-interface=lo
+	dnsmasqManaged := fmt.Sprintf(`except-interface=lo
 bind-interfaces
 interface=%s
 no-dhcp-interface=%s
@@ -1366,9 +1378,25 @@ dhcp-option=6,%s
 dhcp-option=114,http://%s/api/captive-portal
 `, apInterface, phyInterface, req.Gateway, dhcpStart, dhcpEnd, req.LeaseTime, req.Gateway, req.Gateway, req.Gateway)
 
-	tmpDnsmasqFile := "/tmp/dnsmasq.conf.tmp"
+	// Preservar la configuración dnsmasq del usuario: solo se sustituye el
+	// bloque gestionado por HostBerry, no se sobrescribe el archivo entero.
+	existingDnsmasq, _ := os.ReadFile(dnsmasqConfigPath)
+	dnsmasqContent := mergeManagedConfigBlock(string(existingDnsmasq), dnsmasqManagedBeginMarker, dnsmasqManagedEndMarker, dnsmasqManaged)
+
+	tmpDnsmasqF, tmpDnsmasqErr := os.CreateTemp("", "hostberry-dnsmasq-*")
+	if tmpDnsmasqErr != nil {
+		log.Printf("Error creating temporary dnsmasq config file: %v", tmpDnsmasqErr)
+		return c.Status(500).JSON(fiber.Map{
+			"error":   fmt.Sprintf("Error creating temporary dnsmasq config file: %v", tmpDnsmasqErr),
+			"success": false,
+		})
+	}
+	tmpDnsmasqFile := tmpDnsmasqF.Name()
+	tmpDnsmasqF.Close()
+	defer os.Remove(tmpDnsmasqFile)
+
 	if err := os.WriteFile(tmpDnsmasqFile, []byte(dnsmasqContent), 0644); err != nil {
-		log.Printf("Error creating temporary dnsmasq config file: %v", err)
+		log.Printf("Error writing temporary dnsmasq config file: %v", err)
 		return c.Status(500).JSON(fiber.Map{
 			"error":   fmt.Sprintf("Error creating temporary dnsmasq config file: %v", err),
 			"success": false,
@@ -1424,19 +1452,26 @@ ExecStart=/usr/sbin/hostapd -B -P /run/hostapd.pid %s
 PIDFile=/run/hostapd.pid
 Type=forking
 `, configPath)
-	tmpOverrideFile := "/tmp/hostapd-override.conf.tmp"
-	if err := os.WriteFile(tmpOverrideFile, []byte(overrideContent), 0644); err != nil {
-		log.Printf("Warning: Error creating temporary override file: %v", err)
+	overrideTmpF, overrideTmpErr := os.CreateTemp("", "hostberry-override-*")
+	if overrideTmpErr != nil {
+		log.Printf("Warning: Error creating temporary override file: %v", overrideTmpErr)
 	} else {
-		overridePath := fmt.Sprintf("%s/override.conf", overrideDir)
-		os.Chmod(tmpOverrideFile, 0644)
-		cmdStr3 := fmt.Sprintf("sudo cp %s %s && sudo chmod 644 %s", tmpOverrideFile, overridePath, overridePath)
-		if out, err := executeCommand(cmdStr3); err != nil {
-			log.Printf("Warning: Error writing override file: %s, output: %s", err, strings.TrimSpace(out))
+		tmpOverrideFile := overrideTmpF.Name()
+		overrideTmpF.Close()
+		defer os.Remove(tmpOverrideFile)
+		if err := os.WriteFile(tmpOverrideFile, []byte(overrideContent), 0644); err != nil {
+			log.Printf("Warning: Error writing temporary override file: %v", err)
 		} else {
-			log.Printf("Override file created successfully")
+			overridePath := fmt.Sprintf("%s/override.conf", overrideDir)
+			os.Chmod(tmpOverrideFile, 0644)
+			cmdStr3 := fmt.Sprintf("sudo cp %s %s && sudo chmod 644 %s", tmpOverrideFile, overridePath, overridePath)
+			if out, err := executeCommand(cmdStr3); err != nil {
+				log.Printf("Warning: Error writing override file: %s, output: %s", err, strings.TrimSpace(out))
+			} else {
+				log.Printf("Override file created successfully")
+			}
+			os.Remove(tmpOverrideFile)
 		}
-		os.Remove(tmpOverrideFile)
 	}
 
 	manageAp0Script := `#!/bin/bash
@@ -1461,11 +1496,16 @@ if ! ip link show ap0 > /dev/null 2>&1; then
 fi
 `
 	manageAp0Path := "/bin/manage-ap0-iface.sh"
-	tmpManageAp0 := "/tmp/manage-ap0-iface.sh.tmp"
-	if err := os.WriteFile(tmpManageAp0, []byte(manageAp0Script), 0755); err == nil {
-		executeCommand(fmt.Sprintf("sudo cp %s %s && sudo chmod +x %s", tmpManageAp0, manageAp0Path, manageAp0Path))
-		os.Remove(tmpManageAp0)
-		log.Printf("Created manage-ap0-iface.sh script")
+	manageTmpF, manageTmpErr := os.CreateTemp("", "hostberry-manageap0-*")
+	if manageTmpErr == nil {
+		tmpManageAp0 := manageTmpF.Name()
+		manageTmpF.Close()
+		defer os.Remove(tmpManageAp0)
+		if err := os.WriteFile(tmpManageAp0, []byte(manageAp0Script), 0755); err == nil {
+			executeCommand(fmt.Sprintf("sudo cp %s %s && sudo chmod +x %s", tmpManageAp0, manageAp0Path, manageAp0Path))
+			os.Remove(tmpManageAp0)
+			log.Printf("Created manage-ap0-iface.sh script")
+		}
 	}
 
 	overridePath := fmt.Sprintf("%s/override.conf", overrideDir)
@@ -1478,15 +1518,20 @@ Type=forking
 TimeoutStartSec=30
 TimeoutStopSec=10
 `, configPath)
-	tmpOverrideFile2 := "/tmp/hostapd-override.conf.tmp"
-	if err := os.WriteFile(tmpOverrideFile2, []byte(overrideContentWithPreStart), 0644); err == nil {
-		cmdStr4 := fmt.Sprintf("sudo cp %s %s && sudo chmod 644 %s", tmpOverrideFile2, overridePath, overridePath)
-		if out, err := executeCommand(cmdStr4); err != nil {
-			log.Printf("Warning: Error updating override file with pre-start: %s, output: %s", err, strings.TrimSpace(out))
-		} else {
-			log.Printf("Override file updated with pre-start script and PID file configuration")
+	override2TmpF, override2TmpErr := os.CreateTemp("", "hostberry-override-*")
+	if override2TmpErr == nil {
+		tmpOverrideFile2 := override2TmpF.Name()
+		override2TmpF.Close()
+		defer os.Remove(tmpOverrideFile2)
+		if err := os.WriteFile(tmpOverrideFile2, []byte(overrideContentWithPreStart), 0644); err == nil {
+			cmdStr4 := fmt.Sprintf("sudo cp %s %s && sudo chmod 644 %s", tmpOverrideFile2, overridePath, overridePath)
+			if out, err := executeCommand(cmdStr4); err != nil {
+				log.Printf("Warning: Error updating override file with pre-start: %s, output: %s", err, strings.TrimSpace(out))
+			} else {
+				log.Printf("Override file updated with pre-start script and PID file configuration")
+			}
+			os.Remove(tmpOverrideFile2)
 		}
-		os.Remove(tmpOverrideFile2)
 	}
 
 	executeCommand("sudo systemctl daemon-reload")
@@ -1509,11 +1554,16 @@ echo 'WPA Supplicant reconfigure in 5sec...'
 wpa_cli -i %s reconfigure 2>/dev/null || true
 `, phyInterface, apInterface, apInterface, phyInterface, apIPBeginForScript, apIPBeginForScript, phyInterface)
 	rpiWifiPath := "/bin/rpi-wifi.sh"
-	tmpRpiWifi := "/tmp/rpi-wifi.sh.tmp"
-	if err := os.WriteFile(tmpRpiWifi, []byte(rpiWifiScript), 0755); err == nil {
-		executeCommand(fmt.Sprintf("sudo cp %s %s && sudo chmod +x %s", tmpRpiWifi, rpiWifiPath, rpiWifiPath))
-		os.Remove(tmpRpiWifi)
-		log.Printf("Created rpi-wifi.sh script")
+	rpiTmpF, rpiTmpErr := os.CreateTemp("", "hostberry-rpiwifi-*")
+	if rpiTmpErr == nil {
+		tmpRpiWifi := rpiTmpF.Name()
+		rpiTmpF.Close()
+		defer os.Remove(tmpRpiWifi)
+		if err := os.WriteFile(tmpRpiWifi, []byte(rpiWifiScript), 0755); err == nil {
+			executeCommand(fmt.Sprintf("sudo cp %s %s && sudo chmod +x %s", tmpRpiWifi, rpiWifiPath, rpiWifiPath))
+			os.Remove(tmpRpiWifi)
+			log.Printf("Created rpi-wifi.sh script")
+		}
 	}
 
 	executeCommand("sudo systemctl enable hostapd 2>/dev/null || true")

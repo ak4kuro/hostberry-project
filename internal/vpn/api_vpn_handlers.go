@@ -2,6 +2,7 @@ package vpn
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/gofiber/fiber/v2"
 	middleware "hostberry/internal/middleware"
@@ -34,18 +35,18 @@ func VpnServersHandler(c *fiber.Ctx) error {
 			status = "running"
 		}
 		servers = append(servers, fiber.Map{
-			"name":         "openvpn",
-			"address":      remote,
-			"status":       status,
+			"name":          "openvpn",
+			"address":       remote,
+			"status":        status,
 			"clients_count": 0,
 		})
 	}
 
 	for _, ep := range wgEndpoints() {
 		servers = append(servers, fiber.Map{
-			"name":         "wireguard",
-			"address":      ep,
-			"status":       "running",
+			"name":          "wireguard",
+			"address":       ep,
+			"status":        "running",
 			"clients_count": 0,
 		})
 	}
@@ -85,17 +86,33 @@ func VpnClientsHandler(c *fiber.Ctx) error {
 	return c.JSON(clients)
 }
 
-// VpnToggleHandler conmuta el VPN activo (OpenVPN si está activo; si no, WireGuard).
+// VpnToggleHandler conmuta el VPN activo (OpenVPN si está activo; si no,
+// WireGuard). Si ninguno está activo, elige el que tenga configuración
+// guardada en lugar de asumir siempre OpenVPN.
 func VpnToggleHandler(c *fiber.Ctx) error {
 	status := GetVPNStatus()
-	name := "openvpn"
+	name := ""
 	if ovpn, ok := status["openvpn"].(map[string]interface{}); ok {
 		if active, _ := ovpn["active"].(bool); active {
 			name = "openvpn"
-		} else if wg, ok := status["wireguard"].(map[string]interface{}); ok {
+		}
+	}
+	if name == "" {
+		if wg, ok := status["wireguard"].(map[string]interface{}); ok {
 			if active, _ := wg["active"].(bool); active {
 				name = "wireguard"
 			}
+		}
+	}
+	if name == "" {
+		// Nada activo: preferir WireGuard solo si existe su config y no la de
+		// OpenVPN; si ambas faltan, OpenVPN es el default histórico.
+		_, wgErr := os.Stat("/etc/wireguard/wg0.conf")
+		_, ovpnErr := os.Stat(openvpnClientConfigPath)
+		if wgErr == nil && ovpnErr != nil {
+			name = "wireguard"
+		} else {
+			name = "openvpn"
 		}
 	}
 	result, err := ToggleVPNByName(name)

@@ -33,7 +33,7 @@ func WifiConnectHandler(c *fiber.Ctx) error {
 			"error": "Datos inválidos",
 		})
 	}
-	log.Printf("[WIZARD-DEBUG] wifi/connect payload: ssid=%q security=%q pwd_len=%d band=%q iface=%q", req.SSID, req.Security, len(req.Password), req.Band, req.Interface)
+	// No loguear SSID ni metadatos del payload: pueden ser información sensible.
 
 	if err := validators.ValidateSSID(req.SSID); err != nil {
 		return err

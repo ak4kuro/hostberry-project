@@ -151,22 +151,17 @@ func SetupWizardCompleteAPIHandler(c *fiber.Ctx) error {
 				"factory_reset": true,
 			})
 		}
-		user.SetupWizardCompleted = true
-		if err := database.DB.Save(user).Error; err != nil {
-			return c.Status(500).JSON(fiber.Map{
-				"error": i18n.T(c, "errors.general_error_message", "An unexpected error occurred"),
-			})
-		}
-		_ = database.SetConfig("setup_wizard_completed_by_api", "1")
-		// La configuración aplicada queda confirmada: ya no debe revertirse al reabrir.
-		ClearWizardDirty()
+		// Primero las operaciones que pueden fallar: si alguna revierte el
+		// estado, el wizard NO debe marcarse completado (el usuario puede
+		// reintentar). Marcar completed antes de persistir la red pendiente
+		// dejaba el equipo sin WiFi y con el supplicant de setup activo.
 		if err := hostapd.ApplySingleClientAPLimit(false); err != nil {
 			return c.Status(500).JSON(fiber.Map{
 				"error": i18n.T(c, "setup_wizard.release_ap_limit_failed", "Setup saved but the access point could not allow more clients. Check hostapd and dnsmasq."),
 			})
 		}
 		// Desactivar el portal cautivo y habilitar el reparto de Internet del AP. Se persiste en
-		// disco (config dnsmasq + servicio captivo deshabilitado + sysctl), de modo que tras el
+		// disco (config dnsmasq + servicio cautivo deshabilitado + sysctl), de modo que tras el
 		// reinicio el AP "hostberry" da Internet y el panel queda accesible en hostberry.local.
 		hostapd.ApplyNormalAPMode()
 		prefBand := wifi.GetWizardPreferredBand()
@@ -191,6 +186,15 @@ func SetupWizardCompleteAPIHandler(c *fiber.Ctx) error {
 		// Devolver wlan0 a NetworkManager: durante el asistente estuvo bajo un supplicant dedicado
 		// (sin autoscan). Al reiniciar, NM debe gestionarlo de nuevo para la autoconexión normal.
 		wifi.StopSetupModeSupplicant()
+		user.SetupWizardCompleted = true
+		if err := database.DB.Save(user).Error; err != nil {
+			return c.Status(500).JSON(fiber.Map{
+				"error": i18n.T(c, "errors.general_error_message", "An unexpected error occurred"),
+			})
+		}
+		_ = database.SetConfig("setup_wizard_completed_by_api", "1")
+		// La configuración aplicada queda confirmada: ya no debe revertirse al reabrir.
+		ClearWizardDirty()
 		reboot = true
 		username := user.Username
 		go func() {

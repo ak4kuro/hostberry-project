@@ -67,9 +67,9 @@ func execPrivilegedOutputTimeout(cmd string, timeout time.Duration) (string, err
 
 const (
 	wpaCliPrivilegedTimeout = 8 * time.Second
-	iwScanPrivilegedTimeout   = 8 * time.Second
-	wpaCliScanBudget          = 10 * time.Second
-	wpaCliScanBudgetLimited   = 10 * time.Second
+	iwScanPrivilegedTimeout = 8 * time.Second
+	wpaCliScanBudget        = 10 * time.Second
+	wpaCliScanBudgetLimited = 10 * time.Second
 )
 
 // runPrivilegedCommand ejecuta vía privileged-exec (sudo directo falla bajo ProtectSystem=strict).
@@ -762,15 +762,23 @@ func VerifyWiFiPassword(ssid, password, interfaceName, country string) map[strin
 		networkBlock = fmt.Sprintf("network={\n\tssid=\"%s\"\n\tkey_mgmt=NONE\n}", escape(ssid))
 	}
 
-	// Crear config temporal para verificación
-	tempConfigPath := fmt.Sprintf("/tmp/wpa_supplicant-%s-verify.conf", interfaceName)
+	// Crear config temporal para verificación (nombre aleatorio: la ruta
+	// predecible en /tmp permitía ataques de symlink).
+	tmpF, tmpErr := os.CreateTemp("", "wpa-verify-*.conf")
+	if tmpErr != nil {
+		result["error"] = fmt.Sprintf("Error al crear config temporal: %v", tmpErr)
+		return result
+	}
+	tempConfigPath := tmpF.Name()
+	tmpF.Close()
+	defer os.Remove(tempConfigPath)
+
 	configContent := fmt.Sprintf("ctrl_interface=DIR=/run/wpa_supplicant GROUP=netdev\nupdate_config=1\ncountry=%s\n\n%s", country, networkBlock)
 
 	if err := os.WriteFile(tempConfigPath, []byte(configContent), 0600); err != nil {
 		result["error"] = fmt.Sprintf("Error al crear config temporal: %v", err)
 		return result
 	}
-	defer os.Remove(tempConfigPath)
 
 	// Copiar a ubicación con permisos
 	_, err := execPrivilegedOutput(fmt.Sprintf("cp %s %s", tempConfigPath, WpaSupplicantConfigDir+"/"+filepath.Base(tempConfigPath)))

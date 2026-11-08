@@ -313,50 +313,57 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 
 				if !hostnameApplied {
 					hostnameFile := "/etc/hostname"
-					tmpHostname := "/tmp/hostname_hostberry_" + fmt.Sprintf("%d", time.Now().Unix())
-					if wErr := os.WriteFile(tmpHostname, []byte(req.Hostname+"\n"), 0644); wErr == nil {
+					tmpF, tmpErr := os.CreateTemp("", "hostberry-hostname-*")
+					if tmpErr != nil {
+						lastError = tmpErr
+					} else {
+						tmpHostname := tmpF.Name()
+						tmpF.Close()
 						defer os.Remove(tmpHostname)
-						cpCmd := exec.Command("sudo", "cp", "-f", tmpHostname, hostnameFile)
-						cpOut, cpErr := cpCmd.CombinedOutput()
-						out := strings.TrimSpace(string(cpOut))
-						if cpErr == nil {
-							if content, err := os.ReadFile(hostnameFile); err == nil {
-								writtenHostname := strings.TrimSpace(string(content))
-								if writtenHostname == req.Hostname {
-									applyCmdStr := fmt.Sprintf("sudo hostname %s", req.Hostname)
-									if applyOut, applyErr := executeCommand(applyCmdStr); applyErr == nil {
-										verifyCmd := exec.Command("hostname")
-										if verifyOut, err := verifyCmd.Output(); err == nil {
-											currentHostname := strings.TrimSpace(string(verifyOut))
-											if currentHostname == req.Hostname {
-												hostnameApplied = true
-												i18n.LogTf("logs.api_hostname_file_set", req.Hostname)
-												_ = applyOut
-											} else {
-												i18n.LogTf("logs.api_hostname_file_verify_failed", req.Hostname, currentHostname)
-												lastError = fmt.Errorf("verification failed: got %s", currentHostname)
-												lastOutput = applyOut
+						if wErr := os.WriteFile(tmpHostname, []byte(req.Hostname+"\n"), 0644); wErr == nil {
+							defer os.Remove(tmpHostname)
+							cpCmd := exec.Command("sudo", "cp", "-f", tmpHostname, hostnameFile)
+							cpOut, cpErr := cpCmd.CombinedOutput()
+							out := strings.TrimSpace(string(cpOut))
+							if cpErr == nil {
+								if content, err := os.ReadFile(hostnameFile); err == nil {
+									writtenHostname := strings.TrimSpace(string(content))
+									if writtenHostname == req.Hostname {
+										applyCmdStr := fmt.Sprintf("sudo hostname %s", req.Hostname)
+										if applyOut, applyErr := executeCommand(applyCmdStr); applyErr == nil {
+											verifyCmd := exec.Command("hostname")
+											if verifyOut, err := verifyCmd.Output(); err == nil {
+												currentHostname := strings.TrimSpace(string(verifyOut))
+												if currentHostname == req.Hostname {
+													hostnameApplied = true
+													i18n.LogTf("logs.api_hostname_file_set", req.Hostname)
+													_ = applyOut
+												} else {
+													i18n.LogTf("logs.api_hostname_file_verify_failed", req.Hostname, currentHostname)
+													lastError = fmt.Errorf("verification failed: got %s", currentHostname)
+													lastOutput = applyOut
+												}
 											}
+										} else {
+											i18n.LogTf("logs.api_hostname_apply_failed", applyErr, applyOut)
+											lastError = applyErr
+											lastOutput = applyOut
 										}
 									} else {
-										i18n.LogTf("logs.api_hostname_apply_failed", applyErr, applyOut)
-										lastError = applyErr
-										lastOutput = applyOut
+										i18n.LogTf("logs.api_hostname_write_mismatch", req.Hostname, writtenHostname)
+										lastError = fmt.Errorf("written hostname mismatch")
+										lastOutput = out
 									}
 								} else {
-									i18n.LogTf("logs.api_hostname_write_mismatch", req.Hostname, writtenHostname)
-									lastError = fmt.Errorf("written hostname mismatch")
+									i18n.LogTf("logs.api_hostname_read_failed", err)
+									lastError = err
 									lastOutput = out
 								}
 							} else {
-								i18n.LogTf("logs.api_hostname_read_failed", err)
-								lastError = err
+								i18n.LogTf("logs.api_hostname_write_failed", cpErr, out)
+								lastError = cpErr
 								lastOutput = out
 							}
-						} else {
-							i18n.LogTf("logs.api_hostname_write_failed", cpErr, out)
-							lastError = cpErr
-							lastOutput = out
 						}
 					}
 				}
@@ -391,168 +398,197 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 
 				if hostnameApplied {
 					hostsFile := "/etc/hosts"
-					tmpFile := "/tmp/hosts_hostberry_" + fmt.Sprintf("%d", time.Now().Unix())
-
-					i18n.LogTf("logs.api_hosts_creating", req.Hostname)
-
-					newContent := "# See `man hosts` for details.\n"
-					newContent += "#\n"
-					newContent += "# By default, systemd-resolved or libnss-myhostname will resolve\n"
-					newContent += "# localhost and the system hostname if they're not specified here.\n"
-
-					if req.Hostname != "" {
-						newContent += fmt.Sprintf("127.0.0.1\tlocalhost\t%s\n", req.Hostname)
+					tmpF, tmpErr := os.CreateTemp("", "hostberry-hosts-*")
+					if tmpErr != nil {
+						i18n.LogTf("logs.api_hosts_temp_error", tmpErr)
 					} else {
-						newContent += "127.0.0.1\tlocalhost\n"
-					}
+						tmpFile := tmpF.Name()
+						tmpF.Close()
+						defer os.Remove(tmpFile)
 
-					newContent += "::1\t\tlocalhost\n"
+						i18n.LogTf("logs.api_hosts_creating", req.Hostname)
 
-					if err := os.WriteFile(tmpFile, []byte(newContent), 0644); err != nil {
-						i18n.LogTf("logs.api_hosts_temp_error", err)
-					} else {
-						log.Printf("Created new hosts file in /tmp: %s", tmpFile)
+						newContent := "# See `man hosts` for details.\n"
+						newContent += "#\n"
+						newContent += "# By default, systemd-resolved or libnss-myhostname will resolve\n"
+						newContent += "# localhost and the system hostname if they're not specified here.\n"
 
-						if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
-							log.Printf("Error: Temp file does not exist after creation")
+						if req.Hostname != "" {
+							newContent += fmt.Sprintf("127.0.0.1\tlocalhost\t%s\n", req.Hostname)
 						} else {
-							log.Printf("Temp file verified: exists and readable")
+							newContent += "127.0.0.1\tlocalhost\n"
+						}
 
-							copySuccess := false
-							cpPath := "/bin/cp"
-							if _, err := os.Stat(cpPath); os.IsNotExist(err) {
-								cpPath = "/usr/bin/cp"
+						newContent += "::1\t\tlocalhost\n"
+
+						// Preservar el resto de entradas (bloque AdBlock, hosts
+						// personalizados, comentarios de marcadores): solo se
+						// sustituyen las líneas loopback que gestionamos aquí.
+						if existing, err := os.ReadFile(hostsFile); err == nil {
+							for _, line := range strings.Split(string(existing), "\n") {
+								trimmed := strings.TrimSpace(line)
+								if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+									newContent += line + "\n"
+									continue
+								}
+								fields := strings.Fields(trimmed)
+								if len(fields) == 0 {
+									continue
+								}
+								switch fields[0] {
+								case "127.0.0.1", "::1", "0:0:0:0:0:0:0:1", "::ffff:127.0.0.1":
+									continue
+								}
+								newContent += line + "\n"
 							}
+						}
 
-							log.Printf("Attempting to copy with cp: %s -f %s %s", cpPath, tmpFile, hostsFile)
-							cpCmd := exec.Command("sudo", cpPath, "-f", tmpFile, hostsFile)
-							cpCmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-							cpOut, cpErr := cpCmd.CombinedOutput()
+						if err := os.WriteFile(tmpFile, []byte(newContent), 0644); err != nil {
+							i18n.LogTf("logs.api_hosts_temp_error", err)
+						} else {
+							log.Printf("Created new hosts file in /tmp: %s", tmpFile)
 
-							time.Sleep(200 * time.Millisecond)
-							if content, err := os.ReadFile(hostsFile); err == nil {
-								if strings.Contains(string(content), req.Hostname) {
-									log.Printf("Successfully copied with cp - hostname found in /etc/hosts")
-									copySuccess = true
-								} else {
-									if cpErr != nil {
-										log.Printf("Error with cp: %v, output: %s", cpErr, string(cpOut))
+							if _, err := os.Stat(tmpFile); os.IsNotExist(err) {
+								log.Printf("Error: Temp file does not exist after creation")
+							} else {
+								log.Printf("Temp file verified: exists and readable")
+
+								copySuccess := false
+								cpPath := "/bin/cp"
+								if _, err := os.Stat(cpPath); os.IsNotExist(err) {
+									cpPath = "/usr/bin/cp"
+								}
+
+								log.Printf("Attempting to copy with cp: %s -f %s %s", cpPath, tmpFile, hostsFile)
+								cpCmd := exec.Command("sudo", cpPath, "-f", tmpFile, hostsFile)
+								cpCmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
+								cpOut, cpErr := cpCmd.CombinedOutput()
+
+								time.Sleep(200 * time.Millisecond)
+								if content, err := os.ReadFile(hostsFile); err == nil {
+									if strings.Contains(string(content), req.Hostname) {
+										log.Printf("Successfully copied with cp - hostname found in /etc/hosts")
+										copySuccess = true
 									} else {
-										log.Printf("cp command executed but hostname not found in /etc/hosts")
-									}
-									log.Printf("Verification failed after cp: hostname not found in /etc/hosts")
-
-									if strings.Contains(string(cpOut), "Read-only file system") || strings.Contains(string(cpOut), "Read-only") {
-										log.Printf("Warning: /etc/hosts appears to be on a read-only file system")
-										log.Printf("Attempting to remount /etc as read-write...")
-										remountCmd := exec.Command("sudo", "mount", "-o", "remount,rw", "/")
-										remountCmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-										if remountOut, remountErr := remountCmd.CombinedOutput(); remountErr != nil {
-											log.Printf("Could not remount / as read-write: %v, output: %s", remountErr, string(remountOut))
+										if cpErr != nil {
+											log.Printf("Error with cp: %v, output: %s", cpErr, string(cpOut))
 										} else {
-											log.Printf("Successfully remounted / as read-write")
-											cpCmd2 := exec.Command("sudo", cpPath, "-f", tmpFile, hostsFile)
-											cpCmd2.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-											if _, cpErr2 := cpCmd2.CombinedOutput(); cpErr2 == nil {
-												time.Sleep(200 * time.Millisecond)
-												if content2, err2 := os.ReadFile(hostsFile); err2 == nil {
-													if strings.Contains(string(content2), req.Hostname) {
-														log.Printf("Successfully copied after remount - hostname found in /etc/hosts")
-														copySuccess = true
+											log.Printf("cp command executed but hostname not found in /etc/hosts")
+										}
+										log.Printf("Verification failed after cp: hostname not found in /etc/hosts")
+
+										if strings.Contains(string(cpOut), "Read-only file system") || strings.Contains(string(cpOut), "Read-only") {
+											log.Printf("Warning: /etc/hosts appears to be on a read-only file system")
+											log.Printf("Attempting to remount /etc as read-write...")
+											remountCmd := exec.Command("sudo", "mount", "-o", "remount,rw", "/")
+											remountCmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
+											if remountOut, remountErr := remountCmd.CombinedOutput(); remountErr != nil {
+												log.Printf("Could not remount / as read-write: %v, output: %s", remountErr, string(remountOut))
+											} else {
+												log.Printf("Successfully remounted / as read-write")
+												cpCmd2 := exec.Command("sudo", cpPath, "-f", tmpFile, hostsFile)
+												cpCmd2.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
+												if _, cpErr2 := cpCmd2.CombinedOutput(); cpErr2 == nil {
+													time.Sleep(200 * time.Millisecond)
+													if content2, err2 := os.ReadFile(hostsFile); err2 == nil {
+														if strings.Contains(string(content2), req.Hostname) {
+															log.Printf("Successfully copied after remount - hostname found in /etc/hosts")
+															copySuccess = true
+														}
 													}
 												}
 											}
 										}
 									}
-								}
-							} else {
-								if cpErr != nil {
-									log.Printf("Error with cp: %v, output: %s", cpErr, string(cpOut))
 								} else {
-									log.Printf("cp command executed but could not read /etc/hosts: %v", err)
-								}
-							}
-
-							if !copySuccess {
-								log.Printf("Trying alternative method: cat with tee")
-								if tmpContent, err := os.ReadFile(tmpFile); err == nil {
-									catCmd := exec.Command("sudo", "tee", hostsFile)
-									catCmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-									catCmd.Stdin = strings.NewReader(string(tmpContent))
-									catCmd.Stdout = io.Discard
-									catCmd.Stderr = io.Discard
-									if catErr := catCmd.Run(); catErr != nil {
-										log.Printf("Error with cat/tee: %v", catErr)
+									if cpErr != nil {
+										log.Printf("Error with cp: %v, output: %s", cpErr, string(cpOut))
 									} else {
-										log.Printf("cat/tee command executed")
-										time.Sleep(100 * time.Millisecond)
-										if content, err := os.ReadFile(hostsFile); err == nil {
-											if strings.Contains(string(content), req.Hostname) {
-												log.Printf("Successfully copied with cat/tee - hostname found in /etc/hosts")
-												copySuccess = true
-											} else {
-												log.Printf("cat/tee executed but hostname not found in /etc/hosts")
-												log.Printf("Verification failed after cat/tee: hostname not found in /etc/hosts")
-											}
-										}
+										log.Printf("cp command executed but could not read /etc/hosts: %v", err)
 									}
-								} else {
-									log.Printf("Error reading temp hosts file for tee: %v", err)
 								}
-							}
 
-							if !copySuccess {
-								// Reintento con tee (ya no usamos shell con redirecciones).
-								log.Printf("Reintentando copia con tee sin shell")
-								if tmpContent, err := os.ReadFile(tmpFile); err == nil {
-									writeCmd := exec.Command("sudo", "tee", hostsFile)
-									writeCmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-									writeCmd.Stdin = strings.NewReader(string(tmpContent))
-									writeCmd.Stdout = io.Discard
-									writeCmd.Stderr = io.Discard
-									if err := writeCmd.Run(); err == nil {
-										time.Sleep(100 * time.Millisecond)
-										if content, err := os.ReadFile(hostsFile); err == nil {
-											if strings.Contains(string(content), req.Hostname) {
-												log.Printf("Successfully copied with tee - hostname found in /etc/hosts")
-												copySuccess = true
-											} else {
-												log.Printf("tee executed but hostname not found in /etc/hosts")
-												log.Printf("Verification failed after tee: hostname not found in /etc/hosts")
+								if !copySuccess {
+									log.Printf("Trying alternative method: cat with tee")
+									if tmpContent, err := os.ReadFile(tmpFile); err == nil {
+										catCmd := exec.Command("sudo", "tee", hostsFile)
+										catCmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
+										catCmd.Stdin = strings.NewReader(string(tmpContent))
+										catCmd.Stdout = io.Discard
+										catCmd.Stderr = io.Discard
+										if catErr := catCmd.Run(); catErr != nil {
+											log.Printf("Error with cat/tee: %v", catErr)
+										} else {
+											log.Printf("cat/tee command executed")
+											time.Sleep(100 * time.Millisecond)
+											if content, err := os.ReadFile(hostsFile); err == nil {
+												if strings.Contains(string(content), req.Hostname) {
+													log.Printf("Successfully copied with cat/tee - hostname found in /etc/hosts")
+													copySuccess = true
+												} else {
+													log.Printf("cat/tee executed but hostname not found in /etc/hosts")
+													log.Printf("Verification failed after cat/tee: hostname not found in /etc/hosts")
+												}
 											}
 										}
 									} else {
-										log.Printf("Error with tee reintento: %v", err)
+										log.Printf("Error reading temp hosts file for tee: %v", err)
 									}
 								}
-							}
 
-							if copySuccess {
-								chmodPath := "/bin/chmod"
-								if _, err := os.Stat(chmodPath); os.IsNotExist(err) {
-									chmodPath = "/usr/bin/chmod"
-								}
-								chmodCmd := fmt.Sprintf("sudo %s 644 %s", chmodPath, hostsFile)
-								if out, err := executeCommand(chmodCmd); err != nil {
-									log.Printf("Warning: Could not set permissions: %v, output: %s", err, out)
-								} else {
-									log.Printf("Permissions set correctly")
+								if !copySuccess {
+									// Reintento con tee (ya no usamos shell con redirecciones).
+									log.Printf("Reintentando copia con tee sin shell")
+									if tmpContent, err := os.ReadFile(tmpFile); err == nil {
+										writeCmd := exec.Command("sudo", "tee", hostsFile)
+										writeCmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
+										writeCmd.Stdin = strings.NewReader(string(tmpContent))
+										writeCmd.Stdout = io.Discard
+										writeCmd.Stderr = io.Discard
+										if err := writeCmd.Run(); err == nil {
+											time.Sleep(100 * time.Millisecond)
+											if content, err := os.ReadFile(hostsFile); err == nil {
+												if strings.Contains(string(content), req.Hostname) {
+													log.Printf("Successfully copied with tee - hostname found in /etc/hosts")
+													copySuccess = true
+												} else {
+													log.Printf("tee executed but hostname not found in /etc/hosts")
+													log.Printf("Verification failed after tee: hostname not found in /etc/hosts")
+												}
+											}
+										} else {
+											log.Printf("Error with tee reintento: %v", err)
+										}
+									}
 								}
 
-								if content, err := os.ReadFile(hostsFile); err == nil {
-									if strings.Contains(string(content), req.Hostname) {
-										log.Printf("Final verification: hostname %s successfully updated in /etc/hosts", req.Hostname)
+								if copySuccess {
+									chmodPath := "/bin/chmod"
+									if _, err := os.Stat(chmodPath); os.IsNotExist(err) {
+										chmodPath = "/usr/bin/chmod"
+									}
+									chmodCmd := fmt.Sprintf("sudo %s 644 %s", chmodPath, hostsFile)
+									if out, err := executeCommand(chmodCmd); err != nil {
+										log.Printf("Warning: Could not set permissions: %v, output: %s", err, out)
 									} else {
-										log.Printf("Final verification failed: hostname not found")
-										log.Printf("Final /etc/hosts content:\n%s", string(content))
+										log.Printf("Permissions set correctly")
 									}
+
+									if content, err := os.ReadFile(hostsFile); err == nil {
+										if strings.Contains(string(content), req.Hostname) {
+											log.Printf("Final verification: hostname %s successfully updated in /etc/hosts", req.Hostname)
+										} else {
+											log.Printf("Final verification failed: hostname not found")
+											log.Printf("Final /etc/hosts content:\n%s", string(content))
+										}
+									}
+								} else {
+									log.Printf("Error: All copy methods failed. /etc/hosts was not updated.")
 								}
-							} else {
-								log.Printf("Error: All copy methods failed. /etc/hosts was not updated.")
 							}
+
+							os.Remove(tmpFile)
 						}
-
-						os.Remove(tmpFile)
 					}
 
 					applied = append(applied, fmt.Sprintf("Hostname set to %s and /etc/hosts updated", req.Hostname))

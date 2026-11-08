@@ -3,9 +3,7 @@ package system
 import (
 	"fmt"
 	"net"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -252,20 +250,7 @@ func normalizeIntValue(value interface{}, minValue, maxValue int, errorMsg strin
 }
 
 func validateTimezoneValue(tz string) error {
-	if tz == "" {
-		return fiber.NewError(400, "Zona horaria vacía")
-	}
-	if strings.Contains(tz, "..") || strings.Contains(tz, ";") || strings.HasPrefix(tz, "/") {
-		return fiber.NewError(400, "Zona horaria inválida")
-	}
-	zonePath := filepath.Clean(filepath.Join("/usr/share/zoneinfo", tz))
-	if !strings.HasPrefix(zonePath, "/usr/share/zoneinfo/") && zonePath != "/usr/share/zoneinfo" {
-		return fiber.NewError(400, "Zona horaria inválida")
-	}
-	if _, err := os.Stat(zonePath); os.IsNotExist(err) {
-		return fiber.NewError(400, "Zona horaria no encontrada")
-	}
-	return nil
+	return validators.ValidateTimezone(tz)
 }
 
 func validateSMTPHost(host string) error {

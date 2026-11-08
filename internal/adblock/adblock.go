@@ -2,6 +2,8 @@ package adblock
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -414,32 +416,8 @@ func enableDNSCrypt(user string) map[string]interface{} {
 	backupCmd := fmt.Sprintf("sudo cp %s %s.backup 2>/dev/null || true", resolvConf, resolvConf)
 	executeCommand(backupCmd)
 
-	// Leer resolv.conf actual
-	content, err := os.ReadFile(resolvConf)
-	newLines := []string{}
-	if err == nil {
-		lines := strings.Split(string(content), "\n")
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-			if !strings.HasPrefix(trimmed, "nameserver") {
-				newLines = append(newLines, line)
-			}
-		}
-	}
-
-	// Agregar nameserver local
-	newLines = append(newLines, "nameserver 127.0.0.1")
-	newLines = append(newLines, "nameserver ::1")
-
-	newContent := strings.Join(newLines, "\n")
-	writeCmd := exec.Command("sudo", "tee", resolvConf)
-	writeCmd.Stdin = strings.NewReader(newContent)
-	writeCmd.Stdout = io.Discard
-	writeCmd.Stderr = io.Discard
-	if err := writeCmd.Run(); err != nil {
-		i18n.LogTf("logs.dnscrypt_resolv_error", err)
-		// No es crítico, continuar
-	}
+	// Poner nameserver local preservando el resto de resolv.conf
+	writeResolvConfNameservers("127.0.0.1", "::1")
 
 	// Reiniciar systemd-resolved si existe
 	executeCommand("sudo systemctl restart systemd-resolved 2>/dev/null || true")
@@ -470,13 +448,8 @@ func disableDNSCrypt(user string) map[string]interface{} {
 		restoreCmd := fmt.Sprintf("sudo cp %s %s", backupPath, resolvConf)
 		executeCommand(restoreCmd)
 	} else {
-		// Si no hay backup, usar DNS públicos por defecto
-		content := "nameserver 8.8.8.8\nnameserver 8.8.4.4\n"
-		writeCmd := exec.Command("sudo", "tee", resolvConf)
-		writeCmd.Stdin = strings.NewReader(content)
-		writeCmd.Stdout = io.Discard
-		writeCmd.Stderr = io.Discard
-		writeCmd.Run()
+		// Sin backup: conservar comentarios/directivas y solo cambiar DNS
+		writeResolvConfNameservers("8.8.8.8", "8.8.4.4")
 	}
 
 	// Reiniciar systemd-resolved si existe
@@ -486,6 +459,43 @@ func disableDNSCrypt(user string) map[string]interface{} {
 	result["message"] = "DNSCrypt deshabilitado correctamente"
 	i18n.LogT("logs.dnscrypt_disabled")
 	return result
+}
+
+// writeResolvConfNameservers sustituye las líneas `nameserver` de
+// /etc/resolv.conf por las indicadas, preservando comentarios y otras
+// directivas (options, search...). Usa un temporal aleatorio + sudo cp para
+// no requerir shell ni rutas fijas en /tmp.
+func writeResolvConfNameservers(servers ...string) {
+	resolvConf := "/etc/resolv.conf"
+	content, _ := os.ReadFile(resolvConf)
+	var b strings.Builder
+	for _, line := range strings.Split(string(content), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") && strings.HasPrefix(trimmed, "nameserver") {
+			continue
+		}
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	for _, s := range servers {
+		b.WriteString("nameserver " + s + "\n")
+	}
+
+	tmpF, err := os.CreateTemp("", "hostberry-resolv-*")
+	if err != nil {
+		i18n.LogTf("logs.dnscrypt_resolv_error", err)
+		return
+	}
+	tmpPath := tmpF.Name()
+	tmpF.Close()
+	defer os.Remove(tmpPath)
+	if err := os.WriteFile(tmpPath, []byte(b.String()), 0644); err != nil {
+		i18n.LogTf("logs.dnscrypt_resolv_error", err)
+		return
+	}
+	if _, err := executeCommand(fmt.Sprintf("sudo cp %s %s", tmpPath, resolvConf)); err != nil {
+		i18n.LogTf("logs.dnscrypt_resolv_error", err)
+	}
 }
 
 // --- Blocky ---
@@ -698,10 +708,17 @@ func installBlocky(user string) map[string]interface{} {
 		}
 	}
 
-	url := fmt.Sprintf("https://github.com/0xERR0R/blocky/releases/download/%s/blocky_%s_Linux_%s.tar.gz", blockyVersion, blockyVersion, arch)
-	tmpDir := "/tmp/blocky_install"
-	executeCommand("sudo rm -rf " + tmpDir)
-	executeCommand("sudo mkdir -p " + tmpDir)
+	tarballName := fmt.Sprintf("blocky_%s_Linux_%s.tar.gz", blockyVersion, arch)
+	url := fmt.Sprintf("https://github.com/0xERR0R/blocky/releases/download/%s/%s", blockyVersion, tarballName)
+	// Directorio aleatorio: una ruta fija en /tmp permitía a un atacante local
+	// anticiparse y sustituir el binario antes del `sudo cp` a /usr/local/bin.
+	tmpDir, err := os.MkdirTemp("", "blocky-install-*")
+	if err != nil {
+		result["success"] = false
+		result["error"] = fmt.Sprintf("Error creando directorio temporal: %v", err)
+		return result
+	}
+	defer func() { executeCommand("sudo rm -rf " + tmpDir) }()
 
 	// Descargar con HTTP desde Go (no depender de curl en PATH)
 	tarballPath := filepath.Join(os.TempDir(), "blocky_download.tar.gz")
@@ -742,6 +759,15 @@ func installBlocky(user string) map[string]interface{} {
 		return result
 	}
 	defer os.Remove(tarballPath)
+
+	// Verificar el SHA256 del tarball contra blocky_checksums.txt del mismo
+	// release antes de instalar nada como root.
+	if err := verifyBlockyChecksum(tarballPath, tarballName); err != nil {
+		result["success"] = false
+		result["error"] = fmt.Sprintf("Verificación de Blocky fallida: %v", err)
+		i18n.LogTf("logs.blocky_install_error", err)
+		return result
+	}
 
 	// Copiar a dir con sudo y extraer con tar (ruta absoluta para no depender de PATH)
 	copyCmd := fmt.Sprintf("sudo cp %s %s/blocky.tar.gz", tarballPath, tmpDir)
@@ -824,6 +850,53 @@ WantedBy=multi-user.target
 	result["message"] = "Blocky instalado correctamente"
 	i18n.LogT("logs.blocky_installed")
 	return result
+}
+
+// verifyBlockyChecksum descarga blocky_checksums.txt del release y comprueba
+// que el SHA256 del tarball coincide. Falla cerrado: sin verificación no se
+// instala nada como root.
+func verifyBlockyChecksum(tarballPath, tarballName string) error {
+	checksumsURL := fmt.Sprintf("https://github.com/0xERR0R/blocky/releases/download/%s/blocky_checksums.txt", blockyVersion)
+	client := &http.Client{Timeout: 60 * time.Second}
+	resp, err := client.Get(checksumsURL)
+	if err != nil {
+		return fmt.Errorf("no se pudo descargar checksums: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("checksums HTTP %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return fmt.Errorf("leyendo checksums: %w", err)
+	}
+
+	var expected string
+	for _, line := range strings.Split(string(body), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[len(fields)-1] == tarballName {
+			expected = strings.ToLower(fields[0])
+			break
+		}
+	}
+	if expected == "" {
+		return fmt.Errorf("%s no aparece en blocky_checksums.txt", tarballName)
+	}
+
+	f, err := os.Open(tarballPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return err
+	}
+	actual := hex.EncodeToString(h.Sum(nil))
+	if actual != expected {
+		return fmt.Errorf("checksum mismatch: got %s want %s", actual, expected)
+	}
+	return nil
 }
 
 func configureBlocky(upstreams []string, blockLists []string, user string) map[string]interface{} {
@@ -1012,26 +1085,12 @@ func enableBlocky(user string) map[string]interface{} {
 
 	executeCommand("sudo systemctl enable blocky")
 
-	// Configurar resolv.conf para usar Blocky local (temp file + sudo cp para no requerir sudo sh)
+	// Configurar resolv.conf para usar Blocky local
 	resolvConf := "/etc/resolv.conf"
 	backupCmd := fmt.Sprintf("sudo cp %s %s.backup 2>/dev/null || true", resolvConf, resolvConf)
 	executeCommand(backupCmd)
 
-	content, _ := os.ReadFile(resolvConf)
-	newLines := []string{}
-	for _, line := range strings.Split(string(content), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" && !strings.HasPrefix(trimmed, "nameserver") {
-			newLines = append(newLines, line)
-		}
-	}
-	newLines = append(newLines, "nameserver 127.0.0.1", "nameserver ::1")
-	newContent := strings.Join(newLines, "\n")
-	tmpResolv := filepath.Join(os.TempDir(), "hostberry_resolv.conf")
-	if err := os.WriteFile(tmpResolv, []byte(newContent), 0644); err == nil {
-		executeCommand(fmt.Sprintf("sudo cp %s %s", tmpResolv, resolvConf))
-		os.Remove(tmpResolv)
-	}
+	writeResolvConfNameservers("127.0.0.1", "::1")
 	executeCommand("sudo systemctl restart systemd-resolved 2>/dev/null || true")
 
 	result["success"] = true
@@ -1057,11 +1116,7 @@ func disableBlocky(user string) map[string]interface{} {
 	if _, err := os.Stat(backupPath); err == nil {
 		executeCommand(fmt.Sprintf("sudo cp %s %s", backupPath, resolvConf))
 	} else {
-		tmpResolv := filepath.Join(os.TempDir(), "hostberry_resolv.conf")
-		if err := os.WriteFile(tmpResolv, []byte("nameserver 8.8.8.8\nnameserver 8.8.4.4\n"), 0644); err == nil {
-			executeCommand(fmt.Sprintf("sudo cp %s %s", tmpResolv, resolvConf))
-			os.Remove(tmpResolv)
-		}
+		writeResolvConfNameservers("8.8.8.8", "8.8.4.4")
 	}
 	executeCommand("sudo systemctl restart systemd-resolved 2>/dev/null || true")
 

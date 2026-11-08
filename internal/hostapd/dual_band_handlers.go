@@ -12,13 +12,13 @@ import (
 )
 
 type dualBandConfigBody struct {
-	SSID24   string `json:"ssid_24"`
-	SSID5    string `json:"ssid_5"`
-	Channel24 int   `json:"channel_24"`
-	Channel5  int   `json:"channel_5"`
-	Security string `json:"security"`
-	Password string `json:"password"`
-	Country  string `json:"country"`
+	SSID24    string `json:"ssid_24"`
+	SSID5     string `json:"ssid_5"`
+	Channel24 int    `json:"channel_24"`
+	Channel5  int    `json:"channel_5"`
+	Security  string `json:"security"`
+	Password  string `json:"password"`
+	Country   string `json:"country"`
 	Interface string `json:"interface"`
 }
 
@@ -46,7 +46,7 @@ func HostapdDualBandConfigHandler(c *fiber.Ctx) error {
 	if err := c.BodyParser(&req); err != nil {
 		return c.Status(400).JSON(fiber.Map{"success": false, "error": "Invalid request body"})
 	}
-	log.Printf("[WIZARD-DEBUG] dual-band payload: ssid_24=%q ssid_5=%q ch24=%d ch5=%d security=%q pwd_len=%d iface=%q", req.SSID24, req.SSID5, req.Channel24, req.Channel5, req.Security, len(req.Password), req.Interface)
+	// No loguear SSIDs ni metadatos del payload: pueden ser información sensible.
 
 	country := strings.ToUpper(strings.TrimSpace(req.Country))
 	if country == "" {
@@ -59,8 +59,10 @@ func HostapdDualBandConfigHandler(c *fiber.Ctx) error {
 	if security == "" {
 		security = "open"
 	}
+	// No coercionar valores desconocidos a "open": eso desactivaría el cifrado
+	// del AP silenciosamente. Rechazar es lo seguro.
 	if security != "open" && security != "wpa2" && security != "wpa3" {
-		security = "open"
+		return c.Status(400).JSON(fiber.Map{"success": false, "error": "Modo de seguridad no soportado"})
 	}
 
 	// Validación real de la contraseña del AP: WPA2/WPA3 exige 8–63 caracteres (estándar
@@ -108,8 +110,15 @@ func HostapdDualBandConfigHandler(c *fiber.Ctx) error {
 	}
 	cfg.Band24.Security = security
 	cfg.Band5.Security = security
-	cfg.Band24.Password = req.Password
-	cfg.Band5.Password = req.Password
+	// En redes abiertas no persistir la contraseña: evita dejar credenciales
+	// en el JSON del perfil aunque no se usen.
+	if security == "open" {
+		cfg.Band24.Password = ""
+		cfg.Band5.Password = ""
+	} else {
+		cfg.Band24.Password = req.Password
+		cfg.Band5.Password = req.Password
+	}
 	cfg.Band24.Country = country
 	cfg.Band5.Country = country
 

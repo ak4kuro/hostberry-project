@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/gofiber/fiber/v2"
 	"hostberry/internal/database"
@@ -310,7 +311,7 @@ func FirstLoginChangeAPIHandler(c *fiber.Ctx) error {
 	setAccessTokenCookie(c, newToken)
 
 	return c.JSON(fiber.Map{
-		"message":      i18n.T(c, "auth.credentials_updated_redirect", "Credenciales actualizadas. Redirigiendo al panel."),
+		"message": i18n.T(c, "auth.credentials_updated_redirect", "Credenciales actualizadas. Redirigiendo al panel."),
 		"user": fiber.Map{
 			"id":       user.ID,
 			"username": user.Username,
@@ -338,6 +339,24 @@ func UpdateProfileAPIHandler(c *fiber.Ctx) error {
 	if req.Email != "" {
 		if err := validators.ValidateEmail(req.Email); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": "Email inválido"})
+		}
+	}
+
+	// Nombres y timezone se persisten en BD y se usan en logs/UI: limitar
+	// longitud y rechazar caracteres de control.
+	for _, name := range []string{req.FirstName, req.LastName} {
+		if len(name) > 100 {
+			return c.Status(400).JSON(fiber.Map{"error": "Nombre demasiado largo"})
+		}
+		for _, r := range name {
+			if unicode.IsControl(r) {
+				return c.Status(400).JSON(fiber.Map{"error": "Nombre contiene caracteres inválidos"})
+			}
+		}
+	}
+	if req.Timezone != "" {
+		if err := validators.ValidateTimezone(req.Timezone); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Zona horaria inválida"})
 		}
 	}
 
@@ -426,4 +445,3 @@ func SetUserRoleAPIHandler(c *fiber.Ctx) error {
 	database.InsertLog("INFO", database.LogMsg("Rol actualizado a "+role+" para "+target.Username, actor.Username), "auth", &uid)
 	return c.JSON(fiber.Map{"success": true, "username": target.Username, "role": role})
 }
-

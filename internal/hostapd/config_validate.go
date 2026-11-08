@@ -95,6 +95,40 @@ rsn_pairwise=CCMP
 	return b.String()
 }
 
+const (
+	dnsmasqManagedBeginMarker = "# >>> hostberry-dnsmasq >>>"
+	dnsmasqManagedEndMarker   = "# <<< hostberry-dnsmasq <<<"
+)
+
+// mergeManagedConfigBlock devuelve `existing` con el bloque delimitado por
+// begin/end sustituido por `managed`. Si no existe bloque previo, se añade al
+// final. El resto del archivo (config del usuario, otros servicios) se conserva.
+func mergeManagedConfigBlock(existing, beginMarker, endMarker, managed string) string {
+	var kept []string
+	inBlock := false
+	for _, line := range strings.Split(existing, "\n") {
+		t := strings.TrimSpace(line)
+		if t == beginMarker {
+			inBlock = true
+			continue
+		}
+		if t == endMarker {
+			inBlock = false
+			continue
+		}
+		if !inBlock {
+			kept = append(kept, line)
+		}
+	}
+
+	body := strings.TrimRight(strings.Join(kept, "\n"), "\n")
+	block := beginMarker + "\n" + strings.TrimRight(managed, "\n") + "\n" + endMarker + "\n"
+	if body == "" {
+		return block
+	}
+	return body + "\n\n" + block
+}
+
 func respondValidatorError(c *fiber.Ctx, err error) error {
 	var fe *fiber.Error
 	if errors.As(err, &fe) {

@@ -44,8 +44,10 @@ func TestValidateShellCommandAllowList_Denies(t *testing.T) {
 		{"semicolon", "ip route; rm -rf /"},
 		{"backticks", "ip route `id`"},
 		{"unbalanced_single_quote", "ip route 'grep foo"},
-		// Nota: & suelto no es operador en el validator (ej. 2>&1),
-		// por eso no se prohíbe en este test.
+		{"lone_ampersand_background", "ip route & rm -rf /"},
+		{"lone_ampersand_no_space", "ip route&rm -rf /"},
+		{"ampersand_redirect_both", "ip route &> /dev/null"},
+		{"pipe_ampersand", "ip route |& grep foo"},
 	}
 
 	for _, tc := range cases {

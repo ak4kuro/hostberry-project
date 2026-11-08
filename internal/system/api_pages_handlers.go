@@ -2,14 +2,15 @@ package system
 
 import (
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"hostberry/internal/auth"
 	"hostberry/internal/database"
 	"hostberry/internal/i18n"
-	"hostberry/internal/models"
 	middleware "hostberry/internal/middleware"
+	"hostberry/internal/models"
 	webtemplates "hostberry/internal/templates"
 )
 
@@ -83,19 +84,39 @@ func ProfilePageHandler(c *fiber.Ctx) error {
 		})
 	}
 
-	// settings para render de la página.
+	// settings para render de la página. Nunca exponer secretos: cualquier
+	// clave que parezca credencial se elimina antes de serializar.
 	configs, _ := database.GetAllConfigs()
-	delete(configs, "smtp_password")
+	for k := range configs {
+		if isSensitiveConfigKey(k) {
+			delete(configs, k)
+		}
+	}
 	configsJSON, _ := json.Marshal(configs)
 
 	return webtemplates.RenderTemplate(c, "profile", fiber.Map{
-		"Title":              i18n.T(c, "auth.profile", "Profile"),
-		"user":               user,
+		"Title":             i18n.T(c, "auth.profile", "Profile"),
+		"user":              user,
 		"recent_activities": activities,
 		"settings":          configs,
 		"settings_json":     string(configsJSON),
 		"last_update":       time.Now().Unix(),
 	})
+}
+
+// isSensitiveConfigKey marca claves de configuración que no deben exponerse
+// al frontend (credenciales, tokens, claves privadas, PSK...).
+func isSensitiveConfigKey(key string) bool {
+	k := strings.ToLower(key)
+	for _, s := range []string{
+		"password", "passwd", "secret", "token", "private", "psk",
+		"credential", "apikey", "api_key", "access_key",
+	} {
+		if strings.Contains(k, s) {
+			return true
+		}
+	}
+	return false
 }
 
 func FirstLoginPageHandler(c *fiber.Ctx) error {
@@ -121,4 +142,3 @@ func FirstLoginPageHandler(c *fiber.Ctx) error {
 		"Title": i18n.T(c, "auth.first_login", "First Login"),
 	})
 }
-

@@ -74,7 +74,7 @@ func setupApiRoutes(app *fiber.App) {
 		{
 			wifi.Get("/status", wifiHandlers.WifiStatusHandler)
 			wifi.Get("/setup-info", wifiHandlers.WifiSetupInfoHandler)
-			wifi.Post("/setup-band", middleware.MutationLock("radio", 60*time.Second), wifiHandlers.WifiSetupBandHandler)
+			wifi.Post("/setup-band", middleware.RequireAdmin, middleware.MutationLock("radio", 60*time.Second), wifiHandlers.WifiSetupBandHandler)
 			wifi.Get("/scan", wifiHandlers.WifiScanHandler)
 			wifi.Post("/scan", wifiHandlers.WifiScanHandler)
 			wifi.Get("/interfaces", wifiHandlers.WifiInterfacesHandler)

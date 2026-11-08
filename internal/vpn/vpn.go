@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +15,30 @@ import (
 )
 
 const openvpnClientConfigPath = "/etc/openvpn/client.conf"
+
+// atomicWriteFile escribe en un temporal del mismo directorio y renombra:
+// una caída a mitad de escritura no deja la config de VPN corrupta.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".hostberry-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
 
 // executeCommand proxy para mantener compatibilidad interna con el código original.
 func executeCommand(cmd string) (string, error) {
@@ -95,7 +120,7 @@ func saveOpenVPNConfig(config, user string) map[string]interface{} {
 	if user == "" {
 		user = "unknown"
 	}
-	if err := os.WriteFile(openvpnClientConfigPath, []byte(config), 0600); err != nil {
+	if err := atomicWriteFile(openvpnClientConfigPath, []byte(config), 0600); err != nil {
 		result["success"] = false
 		result["error"] = fmt.Sprintf("Error guardando configuración: %v", err)
 		return result
@@ -168,7 +193,7 @@ func connectVPN(config, vpnType, user string) map[string]interface{} {
 
 	if vpnType == "openvpn" {
 		configFile := "/etc/openvpn/client.conf"
-		if err := os.WriteFile(configFile, []byte(config), 0600); err != nil {
+		if err := atomicWriteFile(configFile, []byte(config), 0600); err != nil {
 			result["success"] = false
 			result["error"] = fmt.Sprintf("Error guardando configuración: %v", err)
 			return result
@@ -187,7 +212,7 @@ func connectVPN(config, vpnType, user string) map[string]interface{} {
 		}
 	} else if vpnType == "wireguard" {
 		configFile := "/etc/wireguard/wg0.conf"
-		if err := os.WriteFile(configFile, []byte(config), 0600); err != nil {
+		if err := atomicWriteFile(configFile, []byte(config), 0600); err != nil {
 			result["success"] = false
 			result["error"] = fmt.Sprintf("Error guardando configuración: %v", err)
 			return result
@@ -259,7 +284,7 @@ func configureWireGuard(config, user string) map[string]interface{} {
 	i18n.LogTf("logs.vpn_wireguard_config", user)
 
 	configFile := "/etc/wireguard/wg0.conf"
-	if err := os.WriteFile(configFile, []byte(config), 0600); err != nil {
+	if err := atomicWriteFile(configFile, []byte(config), 0600); err != nil {
 		result["success"] = false
 		result["error"] = fmt.Sprintf("Error guardando configuración: %v", err)
 		result["message"] = "Error guardando configuración"

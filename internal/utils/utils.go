@@ -32,7 +32,8 @@ type cachedResult struct {
 var (
 	commandCache  = make(map[string]*cachedResult)
 	cacheMutex    sync.RWMutex
-	sudoAvailable *bool
+	sudoOnce      sync.Once
+	sudoAvailable bool
 )
 
 // CreateDefaultAdmin crea el usuario admin inicial si la BD está vacía.
@@ -84,17 +85,22 @@ func ExecuteCommand(cmd string) (string, error) {
 }
 
 // ExecuteCommandWithTimeout ejecuta un comando permitido con caché y timeout.
+// El caché solo aplica a comandos de solo lectura que terminan bien: cachear
+// errores o comandos de escritura devuelve estado obsoleto tras mutaciones.
 func ExecuteCommandWithTimeout(cmd string, timeout time.Duration) (string, error) {
+	cacheable := commandIsReadOnly(cmd)
 	cacheKey := cmd + "|" + timeout.String()
 
-	cacheMutex.RLock()
-	if cached, exists := commandCache[cacheKey]; exists {
-		if time.Since(cached.timestamp) < cacheTTL {
-			cacheMutex.RUnlock()
-			return cached.output, cached.err
+	if cacheable {
+		cacheMutex.RLock()
+		if cached, exists := commandCache[cacheKey]; exists {
+			if time.Since(cached.timestamp) < cacheTTL {
+				cacheMutex.RUnlock()
+				return cached.output, cached.err
+			}
 		}
+		cacheMutex.RUnlock()
 	}
-	cacheMutex.RUnlock()
 
 	if err := validateShellCommandAllowList(cmd, allowedShellCommands); err != nil {
 		return "", err
@@ -120,25 +126,24 @@ func ExecuteCommandWithTimeout(cmd string, timeout time.Duration) (string, error
 			err = exec.ErrNotFound
 		}
 		if outputStr == "" {
-			cacheMutex.Lock()
-			commandCache[cacheKey] = &cachedResult{output: "", err: err, timestamp: time.Now()}
-			cacheMutex.Unlock()
 			return "", err
 		}
 	}
 
 	result := strings.TrimSpace(outputStr)
 
-	cacheMutex.Lock()
-	commandCache[cacheKey] = &cachedResult{output: result, err: err, timestamp: time.Now()}
-	if len(commandCache) > 100 {
-		for k := range commandCache {
-			if time.Since(commandCache[k].timestamp) > cacheTTL*2 {
-				delete(commandCache, k)
+	if cacheable && err == nil {
+		cacheMutex.Lock()
+		commandCache[cacheKey] = &cachedResult{output: result, timestamp: time.Now()}
+		if len(commandCache) > 100 {
+			for k := range commandCache {
+				if time.Since(commandCache[k].timestamp) > cacheTTL*2 {
+					delete(commandCache, k)
+				}
 			}
 		}
+		cacheMutex.Unlock()
 	}
-	cacheMutex.Unlock()
 
 	return result, err
 }
@@ -169,6 +174,13 @@ func validateShellCommandAllowList(cmd string, allowedCommands []string) error {
 	// Caracteres que típicamente permiten encadenar instrucciones o sustituciones.
 	// Mitigan inyección cuando "cmd" viene construido con variables.
 	if strings.ContainsAny(cmd, ";\n\r`$") {
+		return exec.ErrNotFound
+	}
+
+	// `&` suelto es un separador de comandos en shell (background). Solo se
+	// permite dentro de la redirección `2>&1` (el `&` va precedido de `>`).
+	// Sin este chequeo, `cmd&otro` colaría `otro` sin validar en el allowlist.
+	if hasIllegalAmpersand(cmd) {
 		return exec.ErrNotFound
 	}
 
@@ -271,6 +283,50 @@ func validateShellCommandAllowList(cmd string, allowedCommands []string) error {
 	}
 
 	return nil
+}
+
+// hasIllegalAmpersand detecta `&` usados como operador de shell fuera de
+// comillas. Se permite únicamente el patrón `>&` (p. ej. `2>&1`); cualquier
+// otro `&` suelto o `&&`... (`&&` se tokeniza como operador válido) se
+// considera ilegal salvo el de redirección.
+func hasIllegalAmpersand(cmd string) bool {
+	inSingle, inDouble := false, false
+	for i := 0; i < len(cmd); i++ {
+		ch := cmd[i]
+		if inSingle {
+			if ch == '\'' {
+				inSingle = false
+			}
+			continue
+		}
+		if inDouble {
+			if ch == '\\' && i+1 < len(cmd) {
+				i++
+				continue
+			}
+			if ch == '"' {
+				inDouble = false
+			}
+			continue
+		}
+		switch ch {
+		case '\'':
+			inSingle = true
+		case '"':
+			inDouble = true
+		case '&':
+			if i+1 < len(cmd) && cmd[i+1] == '&' {
+				i++
+				continue
+			}
+			// `>&` es la redirección `2>&1` (ya validada por la regla de `>`).
+			if i > 0 && cmd[i-1] == '>' {
+				continue
+			}
+			return true
+		}
+	}
+	return false
 }
 
 // shellTokenizeForAllowList separa tokens respetando comillas simples y dobles para que
@@ -394,15 +450,13 @@ func getHostname() string {
 }
 
 func canUseSudo() bool {
-	if sudoAvailable != nil {
-		return *sudoAvailable
-	}
+	sudoOnce.Do(func() {
+		sudoAvailable = detectSudo()
+	})
+	return sudoAvailable
+}
 
-	result := false
-	defer func() {
-		sudoAvailable = &result
-	}()
-
+func detectSudo() bool {
 	if os.Geteuid() == 0 {
 		return false
 	}
@@ -419,35 +473,17 @@ func canUseSudo() bool {
 		if _, err := os.Stat(priv); err == nil {
 			testPriv := exec.CommandContext(ctx, "sudo", "-n", priv, "true")
 			if _, err := testPriv.CombinedOutput(); err == nil {
-				result = true
 				return true
 			}
-			result = true
-			return true
+			// Si el helper existe pero el test falla, no assumir sudo: seguir
+			// con la prueba genérica antes de decidir.
 		}
 	}
 
 	// `sudo -n true` no requiere shell; así mantenemos semántica sin `sh -c`.
 	testCmd := exec.CommandContext(ctx, "sudo", "-n", "true")
-	output, err := testCmd.CombinedOutput()
-	outputStr := strings.ToLower(string(output))
-
-	if err == nil {
-		result = true
-		return true
-	}
-
-	if strings.Contains(outputStr, "no new privileges") {
-		result = false
-		return false
-	}
-
-	if strings.Contains(outputStr, "password") || strings.Contains(outputStr, "a password is required") {
-		result = true
-		return true
-	}
-
-	return false
+	_, err := testCmd.CombinedOutput()
+	return err == nil
 }
 
 func execCommand(cmd string) *exec.Cmd {
@@ -481,6 +517,144 @@ func privilegedExecPath() string {
 // el helper sin tener que re-implementar la lógica de sudo/no-sudo.
 func ExecCommand(cmd string) *exec.Cmd {
 	return execCommand(cmd)
+}
+
+// commandIsReadOnly indica si todos los comandos de la cadena son de solo
+// lectura. Solo esos resultados son seguros de cachear: cachear comandos de
+// escritura (o lecturas que pueden mutar, como `wpa_cli scan`) devolvería
+// estado obsoleto tras cambios.
+func commandIsReadOnly(cmd string) bool {
+	tokens := shellTokenizeForAllowList(cmd)
+	if tokens == nil || len(tokens) == 0 {
+		return false
+	}
+
+	var base string
+	var args []string
+	flushAtom := func() bool {
+		if base == "" {
+			return true
+		}
+		return isReadOnlyInvocation(base, args)
+	}
+
+	expectCommand := true
+	for _, tok := range tokens {
+		switch tok {
+		case "|", "||", "&&":
+			if !flushAtom() {
+				return false
+			}
+			base, args = "", nil
+			expectCommand = true
+			continue
+		}
+
+		if !expectCommand {
+			args = append(args, tok)
+			continue
+		}
+		if tok == "sudo" {
+			continue
+		}
+		base = strings.Trim(tok, `"'`)
+		expectCommand = false
+	}
+	return flushAtom()
+}
+
+func argsContainAny(args []string, words ...string) bool {
+	for _, a := range args {
+		a = strings.Trim(a, `"'`)
+		for _, w := range words {
+			if a == w {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isReadOnlyInvocation decide si una invocación concreta (binario + args) es
+// de solo lectura. Ante la duda devuelve false: no cachear es siempre seguro.
+func isReadOnlyInvocation(base string, args []string) bool {
+	switch base {
+	case "cat", "grep", "awk", "cut", "head", "tail", "pgrep",
+		"journalctl", "free", "df", "nproc", "uname", "true":
+		return true
+	case "iwconfig", "iwlist":
+		// `scan` activa un escaneo; sus resultados no deben servirse de caché.
+		return !argsContainAny(args, "scan")
+	case "sed":
+		// `sed -i` (incl. `-i.bak`) escribe en el archivo.
+		for _, a := range args {
+			a = strings.Trim(a, `"'`)
+			if a == "--in-place" || strings.HasPrefix(a, "-i") {
+				return false
+			}
+		}
+		return true
+	case "hostname":
+		// `hostname` solo imprime; `hostname <nombre>` lo cambia.
+		return len(args) == 0
+	case "hostnamectl":
+		// `hostnamectl <campo>` a secas consulta; `<campo> <valor>` escribe.
+		// Además existen verbos set-* que siempre mutan.
+		if argsContainAny(args, "set-hostname", "set-icon-name", "set-chassis",
+			"set-deployment", "set-location") {
+			return false
+		}
+		var nonFlag int
+		for _, a := range args {
+			a = strings.Trim(a, `"'`)
+			if a != "" && !strings.HasPrefix(a, "-") {
+				nonFlag++
+			}
+		}
+		// Con 2+ argumentos posicionales es una asignación (p. ej.
+		// `hostnamectl chassis server`); con 0-1 es consulta.
+		return nonFlag <= 1
+	case "ip":
+		// `ip addr/route/link/neigh [show]` son lecturas; los verbos de
+		// mutación (set/add/del/...) y `monitor` quedan fuera.
+		return !argsContainAny(args, "set", "add", "del", "delete", "replace",
+			"change", "flush", "monitor")
+	case "iw":
+		return !argsContainAny(args, "set", "add", "del", "delete", "connect",
+			"disconnect", "scan")
+	case "systemctl":
+		return !argsContainAny(args,
+			"start", "stop", "restart", "reload", "try-restart", "condrestart",
+			"enable", "disable", "mask", "unmask", "daemon-reload", "kexec",
+			"poweroff", "halt", "reboot", "suspend", "hibernate", "hybrid-sleep",
+			"isolate", "edit", "set-property", "add-wants", "add-requires",
+			"add-sysv-wants", "add-sysv-requires", "import-environment",
+			"unset-environment", "link", "enable-linger", "disable-linger")
+	case "nmcli":
+		return !argsContainAny(args,
+			"up", "down", "modify", "add", "delete", "disconnect", "connect",
+			"off", "on", "reload", "monitor", "import", "export", "rescan", "set")
+	case "wpa_cli":
+		// Denegar los verbos que mutan estado; el resto (status, signal_poll,
+		// list_networks, get_network, bss...) son consultas cacheables. `scan`
+		// también se excluye: sus resultados deben ser frescos.
+		return !argsContainAny(args,
+			"set_network", "add_network", "remove_network", "select_network",
+			"enable_network", "disable_network", "reconfigure", "reassociate",
+			"disconnect", "scan", "save_config", "reload")
+	case "hostapd_cli":
+		return argsContainAny(args, "status", "all_sta", "get") &&
+			len(args) <= 3
+	case "rfkill":
+		return len(args) > 0 && strings.Trim(args[0], `"'`) == "list"
+	case "ifconfig":
+		// `ifconfig <iface>` imprime; con más args puede configurar.
+		return len(args) <= 1 || (len(args) == 1 && strings.Trim(args[0], `"'`) == "-a")
+	case "wg":
+		return len(args) > 0 && strings.Trim(args[0], `"'`) == "show"
+	default:
+		return false
+	}
 }
 
 func clearCommandCache() {

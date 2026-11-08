@@ -1,6 +1,8 @@
 package validators
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"unicode"
@@ -192,7 +194,10 @@ func firstDirectiveToken(line string) string {
 	if len(fields) == 0 {
 		return ""
 	}
-	return strings.ToLower(strings.TrimSpace(fields[0]))
+	// OpenVPN acepta opciones con prefijo `--`; normalizamos para que
+	// `--up`, `--plugin`, etc. no eludan la lista de directivas peligrosas.
+	tok := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(fields[0])), "--")
+	return tok
 }
 
 func ValidateWireGuardConfig(config string) error {
@@ -205,9 +210,28 @@ func ValidateWireGuardConfig(config string) error {
 	if strings.Contains(config, "\x00") {
 		return fiber.NewError(400, "Configuración contiene bytes nulos inválidos")
 	}
-	lower := strings.ToLower(config)
-	if !strings.Contains(lower, "[interface]") && !strings.Contains(lower, "privatekey") {
-		return fiber.NewError(400, "Configuración WireGuard inválida: debe contener [Interface] y PrivateKey")
+	// wg-quick exige la sección [Interface] con PrivateKey; aceptar solo uno
+	// de los dos permitía guardar configs incompletas que fallan al aplicar.
+	hasInterfaceSection := false
+	hasPrivateKey := false
+	inInterface := false
+	for _, line := range strings.Split(config, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			inInterface = strings.EqualFold(trimmed, "[interface]")
+			if inInterface {
+				hasInterfaceSection = true
+			}
+			continue
+		}
+		if inInterface {
+			if tok := firstDirectiveToken(line); tok == "privatekey" {
+				hasPrivateKey = true
+			}
+		}
+	}
+	if !hasInterfaceSection || !hasPrivateKey {
+		return fiber.NewError(400, "Configuración WireGuard inválida: debe contener [Interface] con PrivateKey")
 	}
 	// wg-quick ejecuta estos hooks como shell; no aceptamos configs arbitrarias con comandos.
 	dangerous := map[string]struct{}{
@@ -222,6 +246,25 @@ func ValidateWireGuardConfig(config string) error {
 				return fiber.NewError(400, "Configuración WireGuard inválida: contiene directivas de ejecución no permitidas")
 			}
 		}
+	}
+	return nil
+}
+
+// ValidateTimezone comprueba que la zona horaria sea una ruta válida dentro de
+// /usr/share/zoneinfo (sin traversal) y exista en el sistema.
+func ValidateTimezone(tz string) error {
+	if tz == "" {
+		return fiber.NewError(400, "Zona horaria vacía")
+	}
+	if strings.Contains(tz, "..") || strings.Contains(tz, ";") || strings.HasPrefix(tz, "/") {
+		return fiber.NewError(400, "Zona horaria inválida")
+	}
+	zonePath := filepath.Clean(filepath.Join("/usr/share/zoneinfo", tz))
+	if !strings.HasPrefix(zonePath, "/usr/share/zoneinfo/") && zonePath != "/usr/share/zoneinfo" {
+		return fiber.NewError(400, "Zona horaria inválida")
+	}
+	if _, err := os.Stat(zonePath); os.IsNotExist(err) {
+		return fiber.NewError(400, "Zona horaria no encontrada")
 	}
 	return nil
 }
@@ -257,10 +300,17 @@ func ValidateVPNConfig(config string) error {
 		"setenv-safe":           {},
 	}
 	for _, line := range strings.Split(config, "\n") {
-		if tok := firstDirectiveToken(line); tok != "" {
-			if _, blocked := dangerous[tok]; blocked {
-				return fiber.NewError(400, "Configuración OpenVPN inválida: contiene directivas de ejecución no permitidas")
-			}
+		tok := firstDirectiveToken(line)
+		if tok == "" {
+			continue
+		}
+		// La interfaz de management de OpenVPN permite controlar el proceso
+		// en ejecución; cualquier directiva "management*" queda bloqueada.
+		if strings.HasPrefix(tok, "management") {
+			return fiber.NewError(400, "Configuración OpenVPN inválida: contiene directivas de ejecución no permitidas")
+		}
+		if _, blocked := dangerous[tok]; blocked {
+			return fiber.NewError(400, "Configuración OpenVPN inválida: contiene directivas de ejecución no permitidas")
 		}
 	}
 	return nil

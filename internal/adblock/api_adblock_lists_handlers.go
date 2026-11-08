@@ -290,11 +290,16 @@ func writeAdblockHostsSection(domains map[string]bool) error {
 	}
 	out.Write(block.Bytes())
 
-	tmp := "/tmp/hostberry-hosts.tmp"
+	tmpF, err := os.CreateTemp("", "hostberry-hosts-*")
+	if err != nil {
+		return err
+	}
+	tmp := tmpF.Name()
+	tmpF.Close()
+	defer os.Remove(tmp)
 	if err := os.WriteFile(tmp, out.Bytes(), 0644); err != nil {
 		return err
 	}
-	defer os.Remove(tmp)
 	if _, err := utils.ExecuteCommand("sudo cp " + tmp + " " + adblockHostsPath + " && sudo chmod 644 " + adblockHostsPath); err != nil {
 		return fmt.Errorf("escribir %s: %w", adblockHostsPath, err)
 	}

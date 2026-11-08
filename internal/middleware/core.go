@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -15,9 +16,9 @@ import (
 	"hostberry/internal/database"
 	"hostberry/internal/i18n"
 	"hostberry/internal/metrics"
+	"hostberry/internal/models"
 	"hostberry/internal/security"
 	webtemplates "hostberry/internal/templates"
-	"hostberry/internal/models"
 	"hostberry/internal/wifisetup"
 )
 
@@ -65,10 +66,20 @@ func isSameOriginForCookieAuth(c *fiber.Ctx) bool {
 		}
 	}
 
+	// Esquema esperado: same-origin exige coincidir también en esquema
+	// (http y https en el mismo host:puerto son orígenes distintos).
+	expectedScheme := "http"
+	if security.IsHTTPSRequest(c) {
+		expectedScheme = "https"
+	}
+
 	// sameOriginURL valida esquema-host-puerto de una URL de Origin/Referer.
 	sameOriginURL := func(raw string) bool {
 		u, err := url.Parse(raw)
 		if err != nil || !strings.EqualFold(u.Hostname(), host) {
+			return false
+		}
+		if !strings.EqualFold(u.Scheme, expectedScheme) {
 			return false
 		}
 		uPort := u.Port()
@@ -90,7 +101,9 @@ func isSameOriginForCookieAuth(c *fiber.Ctx) bool {
 		return sameOriginURL(referer)
 	}
 
-	return true
+	// Inalcanzable (origin y referer vacíos ya devolvieron false arriba),
+	// pero por defecto denegar.
+	return false
 }
 
 func isWifiSetupAPIPath(path string) bool {
@@ -171,16 +184,16 @@ func RequireAuth(c *fiber.Ctx) error {
 	}
 
 	publicPaths := map[string]bool{
-		"/api/v1/auth/login":     true,
-		"/api/v1/auth/login/":    true,
-		"/api/v1/translations":   true,
-		"/api/v1/translations/":  true,
-		"/health":                 true,
-		"/health/":                true,
-		"/health/ready":           true,
-		"/health/ready/":          true,
-		"/health/live":            true,
-		"/health/live/":           true,
+		"/api/v1/auth/login":    true,
+		"/api/v1/auth/login/":   true,
+		"/api/v1/translations":  true,
+		"/api/v1/translations/": true,
+		"/health":               true,
+		"/health/":              true,
+		"/health/ready":         true,
+		"/health/ready/":        true,
+		"/health/live":          true,
+		"/health/live/":         true,
 	}
 
 	normalizedPath := strings.TrimRight(path, "/")
@@ -452,10 +465,8 @@ func LoggingMiddleware(c *fiber.Ctx) error {
 	}
 
 	if config.AppConfig.Server.Debug || status >= 400 {
-		go func() {
-			msg := fmt.Sprintf("%s %s %s desde %s en %s (HTTP %d)", statusEmoji, method, path, ip, durationStr, status)
-			database.InsertLog("INFO", msg, "http", userIDPtr)
-		}()
+		msg := fmt.Sprintf("%s %s %s desde %s en %s (HTTP %d)", statusEmoji, method, path, ip, durationStr, status)
+		enqueueHTTPLog("INFO", msg, "http", userIDPtr)
 	}
 
 	return err
@@ -486,9 +497,7 @@ func ErrorHandler(c *fiber.Ctx, err error) error {
 		if config.AppConfig.Server.Debug {
 			i18n.LogTf("logs.middleware_error", method, path, err)
 		}
-		go func() {
-			database.InsertLog("ERROR", database.LogMsgErr("procesar petición "+path, errMsg, ""), "http", userIDPtr)
-		}()
+		enqueueHTTPLog("ERROR", database.LogMsgErr("procesar petición "+path, errMsg, ""), "http", userIDPtr)
 	}
 
 	if strings.HasPrefix(c.Path(), "/api/") {
@@ -578,9 +587,22 @@ func EnforceHTTPSMiddleware(c *fiber.Ctx) error {
 		return c.Next()
 	}
 
-	host := c.Hostname()
+	// El Host viene del cliente: validarlo antes de construir el redirect o un
+	// Host arbitrario convierte esto en open-redirect / phishing.
+	host, port := splitHostPort(c.Get(fiber.HeaderHost))
 	if host == "" {
-		host = fmt.Sprintf("%s:%d", config.AppConfig.Server.Host, config.AppConfig.Server.Port)
+		host = config.AppConfig.Server.Host
+	}
+	if !isAllowedRedirectHost(host) {
+		if cfgHost := strings.TrimSpace(config.AppConfig.Server.Host); cfgHost != "" && cfgHost != "0.0.0.0" && cfgHost != "::" {
+			host = cfgHost
+			port = ""
+		}
+	}
+	if port != "" {
+		host = net.JoinHostPort(strings.Trim(host, "[]"), strings.TrimPrefix(port, ":"))
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
 	}
 
 	u := url.URL{
@@ -590,6 +612,44 @@ func EnforceHTTPSMiddleware(c *fiber.Ctx) error {
 		RawQuery: c.Context().URI().QueryArgs().String(),
 	}
 	return c.Redirect(u.String(), fiber.StatusPermanentRedirect)
+}
+
+// splitHostPort separa host y puerto de un header Host. Si no hay puerto,
+// devuelve el host sin modificar y port vacío.
+func splitHostPort(hostport string) (host, port string) {
+	hostport = strings.TrimSpace(hostport)
+	if hostport == "" {
+		return "", ""
+	}
+	if h, p, err := net.SplitHostPort(hostport); err == nil {
+		return strings.Trim(h, "[]"), ":" + p
+	}
+	// Sin puerto: puede ser "host" o "[::1]" sin brackets de puerto.
+	return strings.Trim(hostport, "[]"), ""
+}
+
+// isAllowedRedirectHost decide si un hostname puede usarse en el redirect
+// HTTPS: IPs literales, localhost, nombres .local (mDNS), el hostname del
+// equipo y el host configurado. Cualquier otro dominio se considera no
+// confiable para evitar open-redirect.
+func isAllowedRedirectHost(host string) bool {
+	h := strings.ToLower(strings.TrimSpace(host))
+	if h == "" {
+		return false
+	}
+	if h == "localhost" || h == "hostberry.local" || strings.HasSuffix(h, ".local") {
+		return true
+	}
+	if net.ParseIP(h) != nil {
+		return true
+	}
+	if hn, err := os.Hostname(); err == nil && strings.EqualFold(h, hn) {
+		return true
+	}
+	if cfg := strings.ToLower(strings.TrimSpace(config.AppConfig.Server.Host)); cfg != "" && h == cfg {
+		return true
+	}
+	return false
 }
 
 func isAPCaptiveClient(c *fiber.Ctx) bool {
@@ -619,4 +679,3 @@ func isLANClient(c *fiber.Ctx) bool {
 	}
 	return false
 }
-

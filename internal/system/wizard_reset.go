@@ -3,9 +3,8 @@ package system
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
+	"log"
 	"sync"
-	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"hostberry/internal/auth"
@@ -34,7 +33,11 @@ var wizardSessionMu sync.Mutex
 func newWizardSessionToken() string {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
-		return fmt.Sprintf("ws-%d", time.Now().UnixNano())
+		// Fail closed: un token basado en tiempo es adivinable y permitiría
+		// falsificar la cookie de sesión del wizard. Devolver "" hace que no
+		// se emita cookie ni se persista token.
+		log.Printf("ERROR: crypto/rand falló generando token de sesión del wizard: %v", err)
+		return ""
 	}
 	return hex.EncodeToString(b)
 }
@@ -49,14 +52,21 @@ func HandleWizardSessionReset(c *fiber.Ctx, user *models.User) {
 	cookie := c.Cookies(wizardSessionCookieName)
 
 	wizardSessionMu.Lock()
-	stored, _ := database.GetConfig(wizardSessionTokenConfigKey)
+	stored, storedErr := database.GetConfig(wizardSessionTokenConfigKey)
+	if storedErr != nil {
+		log.Printf("WARNING: no se pudo leer el token de sesión del wizard: %v", storedErr)
+	}
 	valid := stored != "" && cookie != "" && cookie == stored
 	if valid {
 		wizardSessionMu.Unlock()
 		return
 	}
 	tok := newWizardSessionToken()
-	_ = database.SetConfig(wizardSessionTokenConfigKey, tok)
+	if tok != "" {
+		if err := database.SetConfig(wizardSessionTokenConfigKey, tok); err != nil {
+			log.Printf("WARNING: no se pudo persistir el token de sesión del wizard: %v", err)
+		}
+	}
 	// Limpiamos la marca de forma atómica bajo el mutex para que varias cargas
 	// concurrentes (p. ej. sondas del portal cautivo) no disparen el reset más de una vez.
 	needReset := IsWizardDirty()
@@ -65,13 +75,15 @@ func HandleWizardSessionReset(c *fiber.Ctx, user *models.User) {
 	}
 	wizardSessionMu.Unlock()
 
-	c.Cookie(&fiber.Cookie{
-		Name:     wizardSessionCookieName,
-		Value:    tok,
-		Path:     "/",
-		HTTPOnly: true,
-		SameSite: "Lax",
-	})
+	if tok != "" {
+		c.Cookie(&fiber.Cookie{
+			Name:     wizardSessionCookieName,
+			Value:    tok,
+			Path:     "/",
+			HTTPOnly: true,
+			SameSite: "Lax",
+		})
+	}
 
 	if needReset {
 		// Revertir en segundo plano para que la página del asistente responda primero
