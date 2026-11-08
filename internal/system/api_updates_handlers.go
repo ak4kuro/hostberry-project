@@ -101,6 +101,25 @@ func SystemUpdatesProjectHandler(c *fiber.Ctx) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 
+		// Solo actualizar si el remoto es el repositorio oficial y estamos en main:
+		// evita que un remote manipulado reciba credenciales o traiga código ajeno.
+		remoteOut, err := exec.CommandContext(ctx, "git", "-C", path, "remote", "get-url", "origin").Output()
+		if err != nil {
+			_ = database.InsertLog("ERROR", database.LogMsgErr("actualizar proyecto", "no se pudo leer el remoto git", ""), "system", uid)
+			return
+		}
+		remote := strings.ToLower(strings.TrimSpace(string(remoteOut)))
+		if !strings.Contains(remote, "github.com/ak4kuro/hostberry-project") &&
+			!strings.Contains(remote, "github.com/hostberry-project/hostberry-project") {
+			_ = database.InsertLog("ERROR", database.LogMsgErr("actualizar proyecto", "remoto git no reconocido: "+remote, ""), "system", uid)
+			return
+		}
+		branchOut, err := exec.CommandContext(ctx, "git", "-C", path, "rev-parse", "--abbrev-ref", "HEAD").Output()
+		if err != nil || strings.TrimSpace(string(branchOut)) != "main" {
+			_ = database.InsertLog("ERROR", database.LogMsgErr("actualizar proyecto", "la rama actual no es main", ""), "system", uid)
+			return
+		}
+
 		cmd := exec.CommandContext(ctx, "git", "-C", path, "pull", "--ff-only")
 		out, err := cmd.CombinedOutput()
 		output := strings.TrimSpace(string(out))

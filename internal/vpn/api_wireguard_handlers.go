@@ -1,15 +1,16 @@
 package vpn
 
 import (
+	"context"
 	"os/exec"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"hostberry/internal/i18n"
 	"hostberry/internal/middleware"
 	"hostberry/internal/models"
 	"hostberry/internal/templates"
-	"hostberry/internal/i18n"
 	"hostberry/internal/validators"
 )
 
@@ -129,10 +130,12 @@ func WireguardToggleHandler(c *fiber.Ctx) error {
 	active := strings.TrimSpace(string(statusOut)) != ""
 
 	var cmd *exec.Cmd
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
 	if active {
-		cmd = exec.Command("sudo", "wg-quick", "down", "wg0")
+		cmd = exec.CommandContext(ctx, "sudo", "wg-quick", "down", "wg0")
 	} else {
-		cmd = exec.Command("sudo", "wg-quick", "up", "wg0")
+		cmd = exec.CommandContext(ctx, "sudo", "wg-quick", "up", "wg0")
 	}
 
 	out, err := cmd.CombinedOutput()
@@ -143,8 +146,10 @@ func WireguardToggleHandler(c *fiber.Ctx) error {
 }
 
 func WireguardRestartHandler(c *fiber.Ctx) error {
-	out1, err1 := exec.Command("sudo", "wg-quick", "down", "wg0").CombinedOutput()
-	out2, err2 := exec.Command("sudo", "wg-quick", "up", "wg0").CombinedOutput()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	out1, err1 := exec.CommandContext(ctx, "sudo", "wg-quick", "down", "wg0").CombinedOutput()
+	out2, err2 := exec.CommandContext(ctx, "sudo", "wg-quick", "up", "wg0").CombinedOutput()
 	if err1 != nil || err2 != nil {
 		return c.Status(500).JSON(fiber.Map{
 			"error":  "Error reiniciando WireGuard (requiere sudo NOPASSWD)",
@@ -183,4 +188,3 @@ func WireguardPageHandler(c *fiber.Ctx) error {
 		"last_update":      time.Now().Unix(),
 	})
 }
-

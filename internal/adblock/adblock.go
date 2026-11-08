@@ -1130,6 +1130,19 @@ func disableBlocky(user string) map[string]interface{} {
 // Usado por el handler que hace de proxy para el frontend.
 func blockyAPIProxy(method, path string, body []byte) (int, []byte) {
 	baseURL := "http://127.0.0.1:" + blockyHTTPPort + "/api"
+	// Solo GET/POST y paths relativos sanos: evita traversal codificado y
+	// acceso a endpoints arbitrarios del localhost de Blocky.
+	if method != http.MethodGet && method != http.MethodPost {
+		return 405, nil
+	}
+	if len(body) > 1<<20 {
+		return 413, nil
+	}
+	path = strings.TrimSpace(path)
+	if path == "" || len(path) > 512 || strings.Contains(path, "..") ||
+		strings.ContainsAny(path, "\x00\r\n") || strings.HasPrefix(path, "//") {
+		return 400, nil
+	}
 	if !strings.HasPrefix(path, "/") {
 		path = "/" + path
 	}
@@ -1151,7 +1164,7 @@ func blockyAPIProxy(method, path string, body []byte) (int, []byte) {
 		return 0, nil
 	}
 	defer resp.Body.Close()
-	data, _ := io.ReadAll(resp.Body)
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	return resp.StatusCode, data
 }
 

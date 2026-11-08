@@ -156,12 +156,22 @@ func RestoreSystemBackup(fileName string) error {
 	}
 	defer f.Close()
 
-	gz, err := gzip.NewReader(f)
+	// Limitar el tamaño del archivo comprimido: un backup legítimo son unos
+	// pocos MB; sin tope un archivo enorme podría llenar el disco.
+	const maxBackupCompressed = 256 << 20 // 256 MiB
+	gz, err := gzip.NewReader(io.LimitReader(f, maxBackupCompressed+1))
 	if err != nil {
 		return err
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	tr := tar.NewReader(io.LimitReader(gz, maxBackupCompressed*20+1)) // tope al descomprimir
+
+	const (
+		maxEntries    = 32
+		maxTotalBytes = 512 << 20 // 512 MiB descomprimido
+	)
+	entries := 0
+	var totalBytes int64
 
 	for {
 		hdr, err := tr.Next()
@@ -171,8 +181,21 @@ func RestoreSystemBackup(fileName string) error {
 		if err != nil {
 			return err
 		}
+		entries++
+		if entries > maxEntries {
+			return fmt.Errorf("backup inválido: demasiadas entradas")
+		}
+		// Solo archivos regulares; symlinks/hardlinks/directorios se ignoran
+		// explícitamente (nunca se escribe fuera de las rutas permitidas).
 		if hdr.Typeflag != tar.TypeReg {
 			continue
+		}
+		if hdr.Size < 0 || hdr.Size > maxTotalBytes {
+			return fmt.Errorf("backup inválido: entrada demasiado grande")
+		}
+		totalBytes += hdr.Size
+		if totalBytes > maxTotalBytes {
+			return fmt.Errorf("backup inválido: tamaño total excesivo")
 		}
 		name := filepath.Base(hdr.Name)
 		var dest string
@@ -194,15 +217,34 @@ func RestoreSystemBackup(fileName string) error {
 		if err := os.MkdirAll(filepath.Dir(dest), 0750); err != nil {
 			return err
 		}
-		out, err := os.OpenFile(dest, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
+		// Escribir en temporal y renombrar: una interrupción a mitad no deja
+		// config.yaml/BD corruptos.
+		tmp, err := os.CreateTemp(filepath.Dir(dest), ".hostberry-restore-*")
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(out, tr); err != nil {
-			out.Close()
+		tmpName := tmp.Name()
+		ok := false
+		defer func() {
+			if !ok {
+				os.Remove(tmpName)
+			}
+		}()
+		if _, err := io.Copy(tmp, io.LimitReader(tr, hdr.Size)); err != nil {
+			tmp.Close()
 			return err
 		}
-		out.Close()
+		if err := tmp.Chmod(0600); err != nil {
+			tmp.Close()
+			return err
+		}
+		if err := tmp.Close(); err != nil {
+			return err
+		}
+		if err := os.Rename(tmpName, dest); err != nil {
+			return err
+		}
+		ok = true
 	}
 	return nil
 }

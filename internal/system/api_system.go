@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"sort"
@@ -56,7 +57,9 @@ func SystemUpdatesHandler(c *fiber.Ctx) error {
 	pkgSet := make(map[string]struct{})
 
 	// 1) Intentar con `apt list --upgradable` (sin shell/pipes).
-	if out, err := exec.Command("apt", "list", "--upgradable").Output(); err == nil {
+	aptCtx, aptCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer aptCancel()
+	if out, err := exec.CommandContext(aptCtx, "apt", "list", "--upgradable").Output(); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			line = strings.TrimSpace(line)
 			if line == "" || strings.HasPrefix(line, "Listing") {
@@ -74,7 +77,7 @@ func SystemUpdatesHandler(c *fiber.Ctx) error {
 
 	// 2) Si no hay resultados, fallback a `apt-get -s upgrade`.
 	if len(pkgSet) == 0 {
-		if out, err := exec.Command("apt-get", "-s", "upgrade").Output(); err == nil {
+		if out, err := exec.CommandContext(aptCtx, "apt-get", "-s", "upgrade").Output(); err == nil {
 			for _, line := range strings.Split(string(out), "\n") {
 				line = strings.TrimSpace(line)
 				if !strings.HasPrefix(line, "Inst ") {
@@ -113,10 +116,8 @@ func SystemHttpsInfoHandler(c *fiber.Ctx) error {
 	isHttps := security.IsHTTPSRequest(c)
 
 	return c.JSON(fiber.Map{
-		"is_https":      isHttps,
-		"host":          config.AppConfig.Server.Host,
-		"port":          config.AppConfig.Server.Port,
-		"tls_cert_file": config.AppConfig.Server.TLSCertFile,
-		"tls_key_file":  config.AppConfig.Server.TLSKeyFile,
+		"is_https": isHttps,
+		"host":     config.AppConfig.Server.Host,
+		"port":     config.AppConfig.Server.Port,
 	})
 }
