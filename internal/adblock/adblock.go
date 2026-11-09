@@ -724,8 +724,9 @@ func installBlocky(user string) map[string]interface{} {
 	}
 	defer func() { _, _ = executeArgv("rm", "-rf", tmpDir) }()
 
-	// Descargar con HTTP desde Go (no depender de curl en PATH)
-	tarballPath := filepath.Join(os.TempDir(), "blocky_download.tar.gz")
+	// Descargar con HTTP desde Go (no depender de curl en PATH). El archivo va
+	// dentro del directorio temporal aleatorio, no en una ruta fija de /tmp.
+	tarballPath := filepath.Join(tmpDir, "blocky_download.tar.gz")
 	client := &http.Client{Timeout: 120 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
