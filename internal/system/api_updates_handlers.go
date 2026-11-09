@@ -42,9 +42,15 @@ func SystemUpdatesExecuteHandler(c *fiber.Ctx) error {
 
 		env := append(os.Environ(), "DEBIAN_FRONTEND=noninteractive")
 
-		updateCmd := exec.CommandContext(ctx, "sudo", "apt-get", "update", "-y")
-		updateCmd.Env = env
-		out1, err1 := updateCmd.CombinedOutput()
+		updateCmd, updateCmdErr := utils.NewArgvCommandContext(ctx, "apt-get", "update", "-y")
+		var out1 []byte
+		var err1 error
+		if updateCmdErr != nil {
+			err1 = updateCmdErr
+		} else {
+			updateCmd.Env = env
+			out1, err1 = updateCmd.CombinedOutput()
+		}
 		output1 := strings.TrimSpace(filterSudoErrors(out1))
 
 		if ctx.Err() == context.DeadlineExceeded {
@@ -61,9 +67,15 @@ func SystemUpdatesExecuteHandler(c *fiber.Ctx) error {
 			return
 		}
 
-		upgradeCmd := exec.CommandContext(ctx, "sudo", "apt-get", "upgrade", "-y")
-		upgradeCmd.Env = env
-		out2, err2 := upgradeCmd.CombinedOutput()
+		upgradeCmd, upgradeCmdErr := utils.NewArgvCommandContext(ctx, "apt-get", "upgrade", "-y")
+		var out2 []byte
+		var err2 error
+		if upgradeCmdErr != nil {
+			err2 = upgradeCmdErr
+		} else {
+			upgradeCmd.Env = env
+			out2, err2 = upgradeCmd.CombinedOutput()
+		}
 		output2 := strings.TrimSpace(filterSudoErrors(out2))
 
 		if err2 != nil {

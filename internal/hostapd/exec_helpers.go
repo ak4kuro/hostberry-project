@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"hostberry/internal/utils"
 	"hostberry/internal/validators"
 )
 
@@ -22,11 +23,17 @@ func validatePhyName(s string) bool {
 	return phyNameRe.MatchString(strings.TrimSpace(s))
 }
 
+// runSudo ejecuta un binario privilegiado como argv. Pasa por
+// privileged-exec --argv (la única vía permitida por sudoers) en lugar de
+// `sudo` directo, que sudoers no autoriza y podría quedarse esperando password.
 func runSudo(bin string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), hostapdCmdTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sudo", append([]string{bin}, args...)...)
-	cmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
+	argv := append([]string{bin}, args...)
+	cmd, err := utils.NewArgvCommandContext(ctx, argv...)
+	if err != nil {
+		return "", err
+	}
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }

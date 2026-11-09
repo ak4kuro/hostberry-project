@@ -293,15 +293,20 @@ AvoidDiskWrites 0
 `, socksBlock, controlBlock, transBlock, dnsBlock, clientOnlyLine, automapLines, hiddenBlock)
 
 	// Escribir configuración
-	cmd := exec.Command("sudo", "tee", configPath)
-	cmd.Stdin = strings.NewReader(configContent)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
+	if teeCmd, err := utils.NewArgvCommand("tee", configPath); err != nil {
 		result["success"] = false
 		result["error"] = fmt.Sprintf("Error escribiendo configuración: %v", err)
-		i18n.LogTf("logs.tor_config_error", err)
 		return result
+	} else {
+		teeCmd.Stdin = strings.NewReader(configContent)
+		teeCmd.Stdout = io.Discard
+		teeCmd.Stderr = io.Discard
+		if err := teeCmd.Run(); err != nil {
+			result["success"] = false
+			result["error"] = fmt.Sprintf("Error escribiendo configuración: %v", err)
+			i18n.LogTf("logs.tor_config_error", err)
+			return result
+		}
 	}
 
 	// Crear directorio de datos y logs
@@ -449,30 +454,29 @@ func getTorCircuitInfo() map[string]interface{} {
 
 const torIptablesComment = "HostBerry-Tor"
 
-func runCommandWithOptionalSudo(bin string, args ...string) *exec.Cmd {
-	cmd := exec.Command(bin, args...)
-	if os.Geteuid() != 0 {
-		// Evitamos prompts: si sudo requiere contraseña, fallará (y manejaremos el error).
-		allArgs := append([]string{bin}, args...)
-		cmd = exec.Command("sudo", allArgs...)
-	}
-	// Mismo entorno que el helper argv de utils: sin prompts de sudo.
-	cmd.Env = append(os.Environ(),
-		"SUDO_ASKPASS=/bin/false",
-		"SUDO_LOG_FILE=",
-	)
-	return cmd
+// runCommandWithOptionalSudo construye un *exec.Cmd privilegiado como argv.
+// utils.NewArgvCommand ya decide entre ejecución directa (root) y
+// privileged-exec --argv (sudo NOPASSWD), con SUDO_ASKPASS desactivado.
+func runCommandWithOptionalSudo(bin string, args ...string) (*exec.Cmd, error) {
+	argv := append([]string{bin}, args...)
+	return utils.NewArgvCommand(argv...)
 }
 
 func iptablesListPREROUTING() (string, error) {
 	// Sin shell: la salida se parsea en Go.
-	cmd := runCommandWithOptionalSudo("iptables", "-t", "nat", "-L", "PREROUTING", "-n", "-v")
+	cmd, err := runCommandWithOptionalSudo("iptables", "-t", "nat", "-L", "PREROUTING", "-n", "-v")
+	if err != nil {
+		return "", err
+	}
 	out, err := cmd.Output()
 	return string(out), err
 }
 
 func runIptablesRule(args ...string) error {
-	cmd := runCommandWithOptionalSudo("iptables", args...)
+	cmd, err := runCommandWithOptionalSudo("iptables", args...)
+	if err != nil {
+		return err
+	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("iptables failed: %v: %s", err, strings.TrimSpace(string(out)))
@@ -482,16 +486,24 @@ func runIptablesRule(args ...string) error {
 
 func persistIptablesRules() {
 	// Guardar con netfilter-persistent cuando exista. Ignoramos errores para no bloquear la funcionalidad principal.
-	_ = runCommandWithOptionalSudo("netfilter-persistent", "save").Run()
+	if cmd, err := runCommandWithOptionalSudo("netfilter-persistent", "save"); err == nil {
+		_ = cmd.Run()
+	}
 
 	// Volcar reglas a /etc/iptables/rules.v4 (estilo heredado del proyecto).
-	rulesCmd := runCommandWithOptionalSudo("iptables-save")
+	rulesCmd, err := runCommandWithOptionalSudo("iptables-save")
+	if err != nil {
+		return
+	}
 	rules, err := rulesCmd.Output()
 	if err != nil {
 		return
 	}
 
-	teeCmd := runCommandWithOptionalSudo("tee", "/etc/iptables/rules.v4")
+	teeCmd, err := runCommandWithOptionalSudo("tee", "/etc/iptables/rules.v4")
+	if err != nil {
+		return
+	}
 	teeCmd.Stdin = strings.NewReader(string(rules))
 	teeCmd.Stdout = io.Discard
 	teeCmd.Stderr = io.Discard

@@ -27,6 +27,19 @@ func executeArgv(args ...string) (string, error) {
 	return utils.ExecuteArgv(args...)
 }
 
+// writeFilePrivileged escribe contenido en una ruta privilegiada vía `tee`
+// con stdin directo (sin shell), enrutado por privileged-exec.
+func writeFilePrivileged(path, content string) error {
+	cmd, err := utils.NewArgvCommand("tee", path)
+	if err != nil {
+		return err
+	}
+	cmd.Stdin = strings.NewReader(content)
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run()
+}
+
 func getAdBlockStatus() map[string]interface{} {
 	result := make(map[string]interface{})
 
@@ -326,11 +339,7 @@ timeout = 5000
 	}())
 
 	// Escribir configuración
-	cmd := exec.Command("sudo", "tee", configPath)
-	cmd.Stdin = strings.NewReader(configContent)
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	if err := cmd.Run(); err != nil {
+	if err := writeFilePrivileged(configPath, configContent); err != nil {
 		result["success"] = false
 		result["error"] = fmt.Sprintf("Error escribiendo configuración: %v", err)
 		i18n.LogTf("logs.dnscrypt_config_error", err)
@@ -351,11 +360,7 @@ googleadservices.*
 googlesyndication.*
 `
 
-		blocklistCmd := exec.Command("sudo", "tee", blocklistPath)
-		blocklistCmd.Stdin = strings.NewReader(blocklistContent)
-		blocklistCmd.Stdout = io.Discard
-		blocklistCmd.Stderr = io.Discard
-		blocklistCmd.Run() // Ignorar errores
+		_ = writeFilePrivileged(blocklistPath, blocklistContent) // Ignorar errores
 	}
 
 	// Crear directorio de logs
@@ -646,13 +651,12 @@ func getBlockyConfig() map[string]interface{} {
 		"upstreams":   []string{},
 		"block_lists": []string{},
 	}
-	cmd := exec.Command("sudo", "cat", blockyConfigPath)
-	out, err := cmd.Output()
+	out, err := executeArgv("cat", blockyConfigPath)
 	if err != nil || len(out) == 0 {
 		return result
 	}
 	var cfg blockyConfigYAML
-	if err := yaml.Unmarshal(out, &cfg); err != nil {
+	if err := yaml.Unmarshal([]byte(out), &cfg); err != nil {
 		return result
 	}
 	if g, ok := cfg.Upstreams.Groups["default"]; ok {
@@ -775,38 +779,28 @@ func installBlocky(user string) map[string]interface{} {
 		result["error"] = fmt.Sprintf("Error copiando descarga: %v (%s)", err, strings.TrimSpace(out))
 		return result
 	}
-	// Importante: evitar "sudo sh -c" para no depender de shells desde executeCommand.
 	tarballInTmp := filepath.Join(tmpDir, "blocky.tar.gz")
-	if out, err := exec.Command("sudo", "tar", "-xzf", tarballInTmp, "-C", tmpDir).CombinedOutput(); err != nil {
+	if out, err := executeArgv("tar", "-xzf", tarballInTmp, "-C", tmpDir); err != nil {
 		result["success"] = false
 		result["error"] = fmt.Sprintf("Error extrayendo Blocky: %v", err)
-		if out != nil {
-			outStr := strings.TrimSpace(string(out))
-			if outStr != "" {
-				result["error"] = outStr
-			}
+		if strings.TrimSpace(out) != "" {
+			result["error"] = strings.TrimSpace(out)
 		}
 		return result
 	}
-	if out, err := exec.Command("sudo", "cp", filepath.Join(tmpDir, "blocky"), "/usr/local/bin/blocky").CombinedOutput(); err != nil {
+	if out, err := executeArgv("cp", filepath.Join(tmpDir, "blocky"), "/usr/local/bin/blocky"); err != nil {
 		result["success"] = false
 		result["error"] = fmt.Sprintf("Error copiando Blocky: %v", err)
-		if out != nil {
-			outStr := strings.TrimSpace(string(out))
-			if outStr != "" {
-				result["error"] = outStr
-			}
+		if strings.TrimSpace(out) != "" {
+			result["error"] = strings.TrimSpace(out)
 		}
 		return result
 	}
-	if out, err := exec.Command("sudo", "chmod", "+x", "/usr/local/bin/blocky").CombinedOutput(); err != nil {
+	if out, err := executeArgv("chmod", "+x", "/usr/local/bin/blocky"); err != nil {
 		result["success"] = false
 		result["error"] = fmt.Sprintf("Error haciendo ejecutable Blocky: %v", err)
-		if out != nil {
-			outStr := strings.TrimSpace(string(out))
-			if outStr != "" {
-				result["error"] = outStr
-			}
+		if strings.TrimSpace(out) != "" {
+			result["error"] = strings.TrimSpace(out)
 		}
 		return result
 	}
@@ -829,9 +823,7 @@ RestartSec=3
 WantedBy=multi-user.target
 `
 	servicePath := "/etc/systemd/system/blocky.service"
-	writeCmd := exec.Command("sudo", "tee", servicePath)
-	writeCmd.Stdin = strings.NewReader(serviceContent)
-	if err := writeCmd.Run(); err != nil {
+	if err := writeFilePrivileged(servicePath, serviceContent); err != nil {
 		result["success"] = false
 		result["error"] = fmt.Sprintf("Error creando servicio systemd: %v", err)
 		return result

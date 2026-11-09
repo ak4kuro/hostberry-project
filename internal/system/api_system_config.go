@@ -403,7 +403,8 @@ func SystemConfigHandler(c *fiber.Ctx) error {
 
 		if key == "timezone" && valueStr != "" {
 			tz := strings.TrimSpace(valueStr)
-			cmd := exec.Command("sudo", "/usr/local/sbin/hostberry-safe/set-timezone", tz)
+			// sudoers autoriza solo esta ruta; -n evita quedar esperando password.
+			cmd := exec.Command("sudo", "-n", "/usr/local/sbin/hostberry-safe/set-timezone", tz)
 			output, err := cmd.CombinedOutput()
 			if err != nil {
 				combined := strings.TrimSpace(string(output))

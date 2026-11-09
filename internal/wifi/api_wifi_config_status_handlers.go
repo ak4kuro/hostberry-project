@@ -1,7 +1,6 @@
 package wifi
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 	"os/exec"
@@ -11,6 +10,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"hostberry/internal/database"
 	middleware "hostberry/internal/middleware"
+	"hostberry/internal/utils"
 	"hostberry/internal/validators"
 )
 
@@ -47,17 +47,27 @@ func WifiConfigHandler(c *fiber.Ctx) error {
 		}
 
 		writeSudoTee := func(path string, content string) error {
-			// Usar stdin en vez de "echo ... | sudo tee" evita shell/pipelines.
-			// stdout/stderr se ignoran para conservar el comportamiento silencioso.
-			cmd := exec.Command("sudo", "tee", path)
-			cmd.Stdin = bytes.NewBufferString(content)
+			// stdin directo vía privileged-exec (sin shell ni `sudo` directo,
+			// que sudoers no autoriza). stdout/stderr se ignoran.
+			cmd, err := utils.NewArgvCommand("tee", path)
+			if err != nil {
+				return err
+			}
+			cmd.Stdin = strings.NewReader(content)
 			cmd.Stdout = io.Discard
 			cmd.Stderr = io.Discard
 			return cmd.Run()
 		}
 
 		if _, err := exec.LookPath("iw"); err == nil {
-			out, err := exec.Command("sudo", "iw", "reg", "set", req.Region).CombinedOutput()
+			iwCmd, iwCmdErr := utils.NewArgvCommand("iw", "reg", "set", req.Region)
+			var out []byte
+			var err error
+			if iwCmdErr != nil {
+				err = iwCmdErr
+			} else {
+				out, err = iwCmd.CombinedOutput()
+			}
 			output := strings.TrimSpace(string(out))
 
 			if err != nil {
@@ -76,9 +86,9 @@ func WifiConfigHandler(c *fiber.Ctx) error {
 					content := "REGDOMAIN=" + req.Region + "\n"
 					if err := writeSudoTee("/etc/default/crda", content); err == nil {
 						database.InsertLog("INFO", database.LogMsg("Región WiFi configurada a "+req.Region+" (crda)", user.Username), "wifi", &userID)
-						_ = exec.Command("sudo", "nmcli", "radio", "wifi", "off").Run()
+						_, _ = execPrivilegedArgv("nmcli", "radio", "wifi", "off")
 						time.Sleep(1 * time.Second)
-						_ = exec.Command("sudo", "nmcli", "radio", "wifi", "on").Run()
+						_, _ = execPrivilegedArgv("nmcli", "radio", "wifi", "on")
 						return c.JSON(fiber.Map{"success": true, "message": "Región WiFi configurada exitosamente. WiFi reiniciado para aplicar cambios."})
 					}
 					if err := writeSudoTee("/etc/conf.d/wireless-regdom", content); err == nil {

@@ -315,7 +315,10 @@ func toggleOpenVPNService() (started bool, output string, err error) {
 	}
 	ctx, cancel := vpnCmdTimeout()
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sudo", "systemctl", action, "openvpn@client")
+	cmd, err := utils.NewArgvCommandContext(ctx, "systemctl", action, "openvpn@client")
+	if err != nil {
+		return !active, "", err
+	}
 	out, err := cmd.CombinedOutput()
 	return !active, strings.TrimSpace(string(out)), err
 }
@@ -335,7 +338,10 @@ func toggleWireGuardService(iface string) (started bool, output string, err erro
 	}
 	ctx, cancel := vpnCmdTimeout()
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sudo", "wg-quick", action, iface)
+	cmd, err := utils.NewArgvCommandContext(ctx, "wg-quick", action, iface)
+	if err != nil {
+		return !active, "", err
+	}
 	out, err := cmd.CombinedOutput()
 	return !active, strings.TrimSpace(string(out)), err
 }

@@ -525,8 +525,8 @@ func HostapdToggleHandler(c *fiber.Ctx) error {
 
 		var errorDetails string
 		if action == "enable" {
-			journalOut, _ := exec.Command("sudo", "journalctl", "-u", "hostapd", "-n", "20", "--no-pager").CombinedOutput()
-			journalLogs := strings.TrimSpace(string(journalOut))
+			journalOut, _ := utils.ExecuteArgvNoCache([]string{"journalctl", "-u", "hostapd", "-n", "20", "--no-pager"}, 10*time.Second)
+			journalLogs := strings.TrimSpace(journalOut)
 			journalLogs = strings.Join(lastNLines(journalLogs, 10), "\n")
 			if journalLogs != "" {
 				lines := strings.Split(journalLogs, "\n")
@@ -545,8 +545,8 @@ func HostapdToggleHandler(c *fiber.Ctx) error {
 					errorDetails = fmt.Sprintf(" Last logs: %s", strings.Join(lines[len(lines)-3:], "; "))
 				}
 			} else {
-				statusOut, _ := exec.Command("sudo", "systemctl", "status", "hostapd", "--no-pager").CombinedOutput()
-				statusInfo := strings.TrimSpace(string(statusOut))
+				statusOut, _ := utils.ExecuteArgvNoCache([]string{"systemctl", "status", "hostapd", "--no-pager"}, 10*time.Second)
+				statusInfo := strings.TrimSpace(statusOut)
 				statusInfo = strings.Join(firstNLines(statusInfo, 15), "\n")
 				if statusInfo != "" {
 					errorDetails = fmt.Sprintf(" Service status: %s", statusInfo)
@@ -578,12 +578,12 @@ func HostapdToggleHandler(c *fiber.Ctx) error {
 		log.Printf("HostAPD failed to start. Checking logs...")
 		enabledStatus := systemctlIsEnabled("hostapd")
 
-		journalOut, _ := exec.Command("sudo", "journalctl", "-u", "hostapd", "-n", "15", "--no-pager").CombinedOutput()
-		journalLogs := strings.TrimSpace(string(journalOut))
+		journalOut, _ := utils.ExecuteArgvNoCache([]string{"journalctl", "-u", "hostapd", "-n", "15", "--no-pager"}, 10*time.Second)
+		journalLogs := strings.TrimSpace(journalOut)
 		journalLogs = strings.Join(lastNLines(journalLogs, 8), "\n")
 
-		statusOut, _ := exec.Command("sudo", "systemctl", "status", "hostapd", "--no-pager").CombinedOutput()
-		statusInfo := strings.TrimSpace(string(statusOut))
+		statusOut, _ := utils.ExecuteArgvNoCache([]string{"systemctl", "status", "hostapd", "--no-pager"}, 10*time.Second)
+		statusInfo := strings.TrimSpace(statusOut)
 		statusInfo = strings.Join(firstNLines(statusInfo, 20), "\n")
 
 		var errorMsg string
@@ -746,8 +746,8 @@ func HostapdDiagnosticsHandler(c *fiber.Ctx) error {
 	diagnostics["transmitting"] = transmitting
 	diagnostics["interface_in_ap_mode"] = iwStatus != ""
 
-	journalOut, _ := exec.Command("sudo", "journalctl", "-u", "hostapd", "-n", "50", "--no-pager").CombinedOutput()
-	journalLogs := string(journalOut)
+	journalOut, _ := utils.ExecuteArgvNoCache([]string{"journalctl", "-u", "hostapd", "-n", "50", "--no-pager"}, 10*time.Second)
+	journalLogs := journalOut
 	journalLogs = strings.Join(lastNLines(journalLogs, 30), "\n")
 	diagnostics["recent_logs"] = journalLogs
 
@@ -1402,7 +1402,7 @@ dhcp-option=114,http://%s/api/captive-portal
 	// Persistir en /etc/sysctl.conf si aún no está (stdin directo, sin shell).
 	if content, err := os.ReadFile("/etc/sysctl.conf"); err == nil &&
 		!strings.Contains(string(content), "net.ipv4.ip_forward=1") {
-		if teeCmd := exec.Command("sudo", "tee", "-a", "/etc/sysctl.conf"); teeCmd != nil {
+		if teeCmd, err := utils.NewArgvCommand("tee", "-a", "/etc/sysctl.conf"); err == nil {
 			teeCmd.Stdin = strings.NewReader("net.ipv4.ip_forward=1\n")
 			teeCmd.Stdout = io.Discard
 			teeCmd.Stderr = io.Discard

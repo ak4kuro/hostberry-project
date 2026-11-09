@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"hostberry/internal/i18n"
+	"hostberry/internal/utils"
 	"hostberry/internal/validators"
 )
 
@@ -45,21 +46,12 @@ func readTrimmedFile(path string) string {
 }
 
 func ipLinkShow(iface string, useSudo bool) (string, error) {
-	if useSudo {
-		out, err := exec.Command("sudo", "ip", "link", "show", iface).Output()
-		return string(out), err
-	}
-	out, err := exec.Command("ip", "link", "show", iface).Output()
-	return string(out), err
+	// El flag useSudo queda obsoleto: privileged-exec decide la vía según euid.
+	return utils.ExecuteArgvNoCache([]string{"ip", "link", "show", iface}, 10*time.Second)
 }
 
 func ipAddrShow(iface string, useSudo bool) (string, error) {
-	if useSudo {
-		out, err := exec.Command("sudo", "ip", "addr", "show", iface).Output()
-		return string(out), err
-	}
-	out, err := exec.Command("ip", "addr", "show", iface).Output()
-	return string(out), err
+	return utils.ExecuteArgvNoCache([]string{"ip", "addr", "show", iface}, 10*time.Second)
 }
 
 func parseLinkState(output string) string {
@@ -148,14 +140,11 @@ func getWPAState(iface string) string {
 	if validators.ValidateIfaceName(iface) != nil {
 		return ""
 	}
-	out, err := exec.Command("sudo", "wpa_cli", "-i", iface, "status").Output()
+	out, err := utils.ExecuteArgvNoCache([]string{"wpa_cli", "-i", iface, "status"}, 8*time.Second)
 	if err != nil {
-		out, err = exec.Command("wpa_cli", "-i", iface, "status").Output()
-		if err != nil {
-			return ""
-		}
+		return ""
 	}
-	return parseWPAState(string(out))
+	return parseWPAState(out)
 }
 
 func parseDefaultGateway(routeOutput, iface string) string {
@@ -236,8 +225,7 @@ func getNetworkInterfaces() map[string]interface{} {
 			i18n.LogTf("logs.network_ap0_found", iface["state"])
 			if iface["state"] == "down" || iface["state"] == "unknown" {
 				i18n.LogT("logs.network_ap0_down")
-				activateCmd := exec.Command("sudo", "ip", "link", "set", "ap0", "up")
-				if activateErr := activateCmd.Run(); activateErr == nil {
+				if _, activateErr := utils.ExecuteArgvNoCache([]string{"ip", "link", "set", "ap0", "up"}, 10*time.Second); activateErr == nil {
 					time.Sleep(500 * time.Millisecond)
 					newState := readTrimmedFile("/sys/class/net/ap0/operstate")
 					if newState != "" {

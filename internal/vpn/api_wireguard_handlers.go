@@ -11,6 +11,7 @@ import (
 	"hostberry/internal/middleware"
 	"hostberry/internal/models"
 	"hostberry/internal/templates"
+	"hostberry/internal/utils"
 	"hostberry/internal/validators"
 )
 
@@ -130,12 +131,16 @@ func WireguardToggleHandler(c *fiber.Ctx) error {
 	active := strings.TrimSpace(string(statusOut)) != ""
 
 	var cmd *exec.Cmd
+	var cmdErr error
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	if active {
-		cmd = exec.CommandContext(ctx, "sudo", "wg-quick", "down", "wg0")
+		cmd, cmdErr = utils.NewArgvCommandContext(ctx, "wg-quick", "down", "wg0")
 	} else {
-		cmd = exec.CommandContext(ctx, "sudo", "wg-quick", "up", "wg0")
+		cmd, cmdErr = utils.NewArgvCommandContext(ctx, "wg-quick", "up", "wg0")
+	}
+	if cmdErr != nil {
+		return c.Status(500).JSON(fiber.Map{"error": cmdErr.Error()})
 	}
 
 	out, err := cmd.CombinedOutput()
@@ -148,8 +153,22 @@ func WireguardToggleHandler(c *fiber.Ctx) error {
 func WireguardRestartHandler(c *fiber.Ctx) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	out1, err1 := exec.CommandContext(ctx, "sudo", "wg-quick", "down", "wg0").CombinedOutput()
-	out2, err2 := exec.CommandContext(ctx, "sudo", "wg-quick", "up", "wg0").CombinedOutput()
+	downCmd, downErr := utils.NewArgvCommandContext(ctx, "wg-quick", "down", "wg0")
+	var out1 []byte
+	var err1 error
+	if downErr != nil {
+		err1 = downErr
+	} else {
+		out1, err1 = downCmd.CombinedOutput()
+	}
+	upCmd, upCmdErr := utils.NewArgvCommandContext(ctx, "wg-quick", "up", "wg0")
+	var out2 []byte
+	var err2 error
+	if upCmdErr != nil {
+		err2 = upCmdErr
+	} else {
+		out2, err2 = upCmd.CombinedOutput()
+	}
 	if err1 != nil || err2 != nil {
 		return c.Status(500).JSON(fiber.Map{
 			"error":  "Error reiniciando WireGuard (requiere sudo NOPASSWD)",

@@ -225,13 +225,12 @@ func getRunDir() string {
 func ensureWpaSupplicantDirs() error {
 	if _, err := os.Stat(WpaSupplicantConfigDir); os.IsNotExist(err) {
 		i18n.LogTf("logs.wpa_config_dir_creating", WpaSupplicantConfigDir)
-		cmd := exec.Command("sudo", "mkdir", "-p", WpaSupplicantConfigDir)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			i18n.LogTf("logs.wpa_config_dir_error", WpaSupplicantConfigDir, err, string(out))
+		if out, err := execPrivilegedArgv("mkdir", "-p", WpaSupplicantConfigDir); err != nil {
+			i18n.LogTf("logs.wpa_config_dir_error", WpaSupplicantConfigDir, err, out)
 		}
 	}
-	exec.Command("sudo", "chmod", "755", WpaSupplicantConfigDir).Run()
-	exec.Command("sudo", "chown", "root:netdev", WpaSupplicantConfigDir).Run()
+	_, _ = execPrivilegedArgv("chmod", "755", WpaSupplicantConfigDir)
+	_, _ = execPrivilegedArgv("chown", "root:netdev", WpaSupplicantConfigDir)
 
 	runDirCandidates := WpaSocketDirs
 	var createdDir string
@@ -244,9 +243,8 @@ func ensureWpaSupplicantDirs() error {
 		}
 
 		i18n.LogTf("logs.socket_dir_creating", dir)
-		cmd := exec.Command("sudo", "mkdir", "-p", dir)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			i18n.LogTf("logs.socket_dir_create_error", dir, err, string(out))
+		if out, err := execPrivilegedArgv("mkdir", "-p", dir); err != nil {
+			i18n.LogTf("logs.socket_dir_create_error", dir, err, out)
 			continue
 		}
 
@@ -263,8 +261,8 @@ func ensureWpaSupplicantDirs() error {
 		i18n.LogTf("logs.socket_dir_temp", createdDir)
 	}
 
-	exec.Command("sudo", "chmod", "775", createdDir).Run()
-	exec.Command("sudo", "chown", "root:netdev", createdDir).Run()
+	_, _ = execPrivilegedArgv("chmod", "775", createdDir)
+	_, _ = execPrivilegedArgv("chown", "root:netdev", createdDir)
 
 	activeRunDir = createdDir
 	i18n.LogTf("logs.socket_dir_active", activeRunDir)

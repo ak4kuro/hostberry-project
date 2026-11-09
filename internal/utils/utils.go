@@ -93,6 +93,7 @@ var allowedCommands = []string{
 	"dhclient", "udhcpc", "wpa_supplicant", "wpa_cli", "pkill", "killall",
 	"udevadm",
 	"apt-get", "apt",
+	"tar", "mount",
 	"true",
 }
 
@@ -223,6 +224,30 @@ func execArgvCommand(args []string) *exec.Cmd {
 	return exec.Command(args[0], args[1:]...)
 }
 
+// NewArgvCommandContext construye un *exec.Cmd para una invocación argv
+// privilegiada: valida la allowlist, enruta por privileged-exec --argv cuando
+// hace falta root y fija SUDO_ASKPASS=/bin/false para que sudo nunca quede
+// esperando una contraseña. El caller puede asignar Stdin/Stdout/Stderr.
+func NewArgvCommandContext(ctx context.Context, args ...string) (*exec.Cmd, error) {
+	if err := validateArgvAllowList(args); err != nil {
+		return nil, err
+	}
+	baseCmd := execArgvCommand(args)
+	cmd := exec.CommandContext(ctx, baseCmd.Args[0])
+	cmd.Args = baseCmd.Args
+	cmd.Env = append(os.Environ(),
+		"SUDO_ASKPASS=/bin/false",
+		"SUDO_LOG_FILE=",
+		"HOSTNAME="+getHostname(),
+	)
+	return cmd, nil
+}
+
+// NewArgvCommand es NewArgvCommandContext sin deadline de contexto.
+func NewArgvCommand(args ...string) (*exec.Cmd, error) {
+	return NewArgvCommandContext(context.Background(), args...)
+}
+
 // ExecuteArgv ejecuta un comando como argv (sin shell) con timeout por
 // defecto. Solo se permiten binarios de la allowlist; los argumentos se
 // pasan literalmente, eliminando la clase de bugs de quoting/inyección.
@@ -267,14 +292,10 @@ func executeArgv(args []string, timeout time.Duration, allowCache bool) (string,
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	baseCmd := execArgvCommand(args)
-	cmdObj := exec.CommandContext(ctx, baseCmd.Path)
-	cmdObj.Args = baseCmd.Args
-	cmdObj.Env = append(os.Environ(),
-		"SUDO_ASKPASS=/bin/false",
-		"SUDO_LOG_FILE=",
-		"HOSTNAME="+getHostname(),
-	)
+	cmdObj, err := NewArgvCommandContext(ctx, args...)
+	if err != nil {
+		return "", err
+	}
 
 	out, err := cmdObj.CombinedOutput()
 	outputStr := FilterSudoErrorString(string(out))

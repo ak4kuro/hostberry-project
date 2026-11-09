@@ -103,24 +103,26 @@ func nmcliFirstActiveConnectionName() string {
 	return ""
 }
 
+// sudoCmd construye un comando privilegiado argv vía privileged-exec
+// (sudoers solo autoriza el wrapper; `sudo` directo fallaría o colgaría).
+func sudoCmd(args ...string) (*exec.Cmd, error) {
+	return utils.NewArgvCommand(args...)
+}
+
 func writeFileWithSudoTee(path string, content string) error {
-	cmd := exec.Command("sudo", "tee", path)
+	cmd, err := sudoCmd("tee", path)
+	if err != nil {
+		return err
+	}
 	cmd.Stdin = strings.NewReader(content)
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
-	cmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-	_, err := cmd.CombinedOutput()
+	_, err = cmd.CombinedOutput()
 	return err
 }
 
 func writeFileBytesWithSudoTee(path string, content []byte) error {
-	cmd := exec.Command("sudo", "tee", path)
-	cmd.Stdin = strings.NewReader(string(content))
-	cmd.Stdout = io.Discard
-	cmd.Stderr = io.Discard
-	cmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-	_, err := cmd.CombinedOutput()
-	return err
+	return writeFileWithSudoTee(path, string(content))
 }
 
 func NetworkRoutingHandler(c *fiber.Ctx) error {
@@ -320,8 +322,14 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 						defer os.Remove(tmpHostname)
 						if wErr := os.WriteFile(tmpHostname, []byte(req.Hostname+"\n"), 0644); wErr == nil {
 							defer os.Remove(tmpHostname)
-							cpCmd := exec.Command("sudo", "cp", "-f", tmpHostname, hostnameFile)
-							cpOut, cpErr := cpCmd.CombinedOutput()
+							cpCmd, cpCmdErr := sudoCmd("cp", "-f", tmpHostname, hostnameFile)
+							var cpOut []byte
+							var cpErr error
+							if cpCmdErr != nil {
+								cpErr = cpCmdErr
+							} else {
+								cpOut, cpErr = cpCmd.CombinedOutput()
+							}
 							out := strings.TrimSpace(string(cpOut))
 							if cpErr == nil {
 								if content, err := os.ReadFile(hostnameFile); err == nil {
@@ -450,15 +458,16 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 								log.Printf("Temp file verified: exists and readable")
 
 								copySuccess := false
-								cpPath := "/bin/cp"
-								if _, err := os.Stat(cpPath); os.IsNotExist(err) {
-									cpPath = "/usr/bin/cp"
-								}
 
-								log.Printf("Attempting to copy with cp: %s -f %s %s", cpPath, tmpFile, hostsFile)
-								cpCmd := exec.Command("sudo", cpPath, "-f", tmpFile, hostsFile)
-								cpCmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-								cpOut, cpErr := cpCmd.CombinedOutput()
+								log.Printf("Attempting to copy hosts file to %s", hostsFile)
+								cpCmd, cpCmdErr := sudoCmd("cp", "-f", tmpFile, hostsFile)
+								var cpOut []byte
+								var cpErr error
+								if cpCmdErr != nil {
+									cpErr = cpCmdErr
+								} else {
+									cpOut, cpErr = cpCmd.CombinedOutput()
+								}
 
 								time.Sleep(200 * time.Millisecond)
 								if content, err := os.ReadFile(hostsFile); err == nil {
@@ -476,20 +485,27 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 										if strings.Contains(string(cpOut), "Read-only file system") || strings.Contains(string(cpOut), "Read-only") {
 											log.Printf("Warning: /etc/hosts appears to be on a read-only file system")
 											log.Printf("Attempting to remount /etc as read-write...")
-											remountCmd := exec.Command("sudo", "mount", "-o", "remount,rw", "/")
-											remountCmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-											if remountOut, remountErr := remountCmd.CombinedOutput(); remountErr != nil {
+											remountCmd, remountCmdErr := sudoCmd("mount", "-o", "remount,rw", "/")
+											var remountOut []byte
+											var remountErr error
+											if remountCmdErr != nil {
+												remountErr = remountCmdErr
+											} else {
+												remountOut, remountErr = remountCmd.CombinedOutput()
+											}
+											if remountErr != nil {
 												log.Printf("Could not remount / as read-write: %v, output: %s", remountErr, string(remountOut))
 											} else {
 												log.Printf("Successfully remounted / as read-write")
-												cpCmd2 := exec.Command("sudo", cpPath, "-f", tmpFile, hostsFile)
-												cpCmd2.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-												if _, cpErr2 := cpCmd2.CombinedOutput(); cpErr2 == nil {
-													time.Sleep(200 * time.Millisecond)
-													if content2, err2 := os.ReadFile(hostsFile); err2 == nil {
-														if strings.Contains(string(content2), req.Hostname) {
-															log.Printf("Successfully copied after remount - hostname found in /etc/hosts")
-															copySuccess = true
+												cpCmd2, cpCmd2Err := sudoCmd("cp", "-f", tmpFile, hostsFile)
+												if cpCmd2Err == nil {
+													if _, cpErr2 := cpCmd2.CombinedOutput(); cpErr2 == nil {
+														time.Sleep(200 * time.Millisecond)
+														if content2, err2 := os.ReadFile(hostsFile); err2 == nil {
+															if strings.Contains(string(content2), req.Hostname) {
+																log.Printf("Successfully copied after remount - hostname found in /etc/hosts")
+																copySuccess = true
+															}
 														}
 													}
 												}
@@ -505,14 +521,9 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 								}
 
 								if !copySuccess {
-									log.Printf("Trying alternative method: cat with tee")
+									log.Printf("Trying alternative method: tee")
 									if tmpContent, err := os.ReadFile(tmpFile); err == nil {
-										catCmd := exec.Command("sudo", "tee", hostsFile)
-										catCmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-										catCmd.Stdin = strings.NewReader(string(tmpContent))
-										catCmd.Stdout = io.Discard
-										catCmd.Stderr = io.Discard
-										if catErr := catCmd.Run(); catErr != nil {
+										if catErr := writeFileWithSudoTee(hostsFile, string(tmpContent)); catErr != nil {
 											log.Printf("Error with cat/tee: %v", catErr)
 										} else {
 											log.Printf("cat/tee command executed")
@@ -536,12 +547,7 @@ func NetworkConfigHandler(c *fiber.Ctx) error {
 									// Reintento con tee (ya no usamos shell con redirecciones).
 									log.Printf("Reintentando copia con tee sin shell")
 									if tmpContent, err := os.ReadFile(tmpFile); err == nil {
-										writeCmd := exec.Command("sudo", "tee", hostsFile)
-										writeCmd.Env = append(os.Environ(), "SUDO_ASKPASS=/bin/false")
-										writeCmd.Stdin = strings.NewReader(string(tmpContent))
-										writeCmd.Stdout = io.Discard
-										writeCmd.Stderr = io.Discard
-										if err := writeCmd.Run(); err == nil {
+										if err := writeFileWithSudoTee(hostsFile, string(tmpContent)); err == nil {
 											time.Sleep(100 * time.Millisecond)
 											if content, err := os.ReadFile(hostsFile); err == nil {
 												if strings.Contains(string(content), req.Hostname) {

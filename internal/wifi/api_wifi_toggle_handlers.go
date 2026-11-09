@@ -25,12 +25,14 @@ func WifiToggleHandler(c *fiber.Ctx) error {
 		return c.Status(400).JSON(fiber.Map{"success": false, "error": "Nombre de interfaz inválido"})
 	}
 
-	rfkillOut, rfkillErr := exec.Command("sudo", "rfkill", "list", "wifi").CombinedOutput()
+	rfkillOut, rfkillErr := execPrivilegedArgvTimeout([]string{"rfkill", "list", "wifi"}, 8*time.Second)
 	if rfkillErr != nil {
 		// Fallback por si no hay sudo o si el proceso corre como root.
-		rfkillOut, _ = exec.Command("rfkill", "list", "wifi").CombinedOutput()
+		if fb, _ := exec.Command("rfkill", "list", "wifi").CombinedOutput(); len(fb) > 0 {
+			rfkillOut = string(fb)
+		}
 	}
-	softBlocked := strings.Contains(strings.ToLower(string(rfkillOut)), "soft blocked: yes")
+	softBlocked := strings.Contains(strings.ToLower(rfkillOut), "soft blocked: yes")
 	isBlocked := softBlocked
 
 	result := ToggleWiFi(interfaceName, isBlocked)
