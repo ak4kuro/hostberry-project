@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: HostBerry API
-  version: 2.1.0
+  version: 2.1.1
   description: API REST del panel HostBerry para Raspberry Pi / Linux.
 servers:
   - url: /api/v1
@@ -395,13 +395,6 @@ paths:
       security: [{ cookieAuth: [] }]
       responses:
         '200': { description: OK }
-  /network/status:
-    get:
-      summary: Estado de red
-      tags: [network]
-      security: [{ cookieAuth: [] }]
-      responses:
-        '200': { description: OK }
   /system/backup:
     post:
       summary: Crear backup (admin)
@@ -437,6 +430,379 @@ paths:
       security: [{ cookieAuth: [] }]
       responses:
         '200': { description: Comando enviado }
+  /system/shutdown:
+    post:
+      summary: Apagar sistema (admin)
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: Comando enviado }
+  /system/https-info:
+    get:
+      summary: Estado HTTPS/TLS (auth)
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /system/activity:
+    get:
+      summary: Actividad reciente (auth)
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /system/network:
+    get:
+      summary: Información de red del sistema (auth)
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /system/metrics:
+    get:
+      summary: Resumen de métricas (auth)
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /system/updates/execute:
+    post:
+      summary: Ejecutar actualización del sistema (admin)
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /system/updates/project:
+    post:
+      summary: Actualizar proyecto vía git pull (admin)
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /system/notifications/test-email:
+    post:
+      summary: Enviar email de prueba (admin)
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /auth/logout:
+    post:
+      summary: Cerrar sesión
+      tags: [auth]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /auth/logout-all:
+    post:
+      summary: Cerrar sesión en todos los dispositivos
+      tags: [auth]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /auth/change-password:
+    post:
+      summary: Cambiar contraseña
+      tags: [auth]
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                current_password: { type: string }
+                new_password: { type: string }
+      responses:
+        '200': { description: OK }
+        '400': { description: Contraseña inválida }
+  /auth/first-login/change:
+    post:
+      summary: Completar primer login (cambio de credenciales iniciales)
+      tags: [auth]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        '200': { description: OK }
+        '429': { description: Rate limit }
+  /auth/profile:
+    post:
+      summary: Actualizar perfil de usuario
+      tags: [auth]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /auth/preferences:
+    post:
+      summary: Actualizar preferencias de usuario
+      tags: [auth]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /wifi/config:
+    post:
+      summary: Guardar configuración WiFi (admin)
+      tags: [wifi]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /network/speedtest:
+    post:
+      summary: Test de velocidad (admin)
+      tags: [network]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: Resultados del test }
+  /vpn/certificates/generate:
+    post:
+      summary: Generar certificados VPN (admin)
+      tags: [vpn]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /hostapd/clients:
+    get:
+      summary: Clientes conectados al AP (auth)
+      tags: [hostapd]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /hostapd/diagnostics:
+    get:
+      summary: Diagnóstico del AP (auth)
+      tags: [hostapd]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /hostapd/create-ap0:
+    post:
+      summary: Crear interfaz virtual ap0 (admin)
+      tags: [hostapd]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /wireguard/interfaces:
+    get:
+      summary: Interfaces WireGuard (auth)
+      tags: [wireguard]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /wireguard/peers:
+    get:
+      summary: Peers WireGuard (auth)
+      tags: [wireguard]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /wireguard/config:
+    get:
+      summary: Obtener configuración WireGuard (admin)
+      tags: [wireguard]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+    post:
+      summary: Guardar configuración WireGuard (admin)
+      tags: [wireguard]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /wireguard/restart:
+    post:
+      summary: Reiniciar WireGuard (admin)
+      tags: [wireguard]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/lists/{name}/toggle:
+    post:
+      summary: Activar/desactivar lista AdBlock (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK }
+  /adblock/domains/{name}/toggle:
+    post:
+      summary: Activar/desactivar dominio AdBlock (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: name, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: OK }
+  /adblock/config:
+    post:
+      summary: Guardar configuración AdBlock (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/dnscrypt/status:
+    get:
+      summary: Estado DNSCrypt (auth)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/dnscrypt/install:
+    post:
+      summary: Instalar DNSCrypt (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/dnscrypt/configure:
+    post:
+      summary: Configurar DNSCrypt (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/dnscrypt/enable:
+    post:
+      summary: Activar DNSCrypt (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/dnscrypt/disable:
+    post:
+      summary: Desactivar DNSCrypt (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/blocky/status:
+    get:
+      summary: Estado Blocky (auth)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/blocky/config:
+    get:
+      summary: Configuración Blocky (auth)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/blocky/install:
+    post:
+      summary: Instalar Blocky (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/blocky/configure:
+    post:
+      summary: Configurar Blocky (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/blocky/enable:
+    post:
+      summary: Activar Blocky (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/blocky/disable:
+    post:
+      summary: Desactivar Blocky (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /adblock/blocky/api/{path}:
+    get:
+      summary: Proxy a API de Blocky (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: path, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Respuesta de Blocky }
+    post:
+      summary: Proxy a API de Blocky (admin)
+      tags: [adblock]
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: path, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Respuesta de Blocky }
+  /tor/install:
+    post:
+      summary: Instalar Tor (admin)
+      tags: [tor]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /tor/configure:
+    post:
+      summary: Configurar Tor (admin)
+      tags: [tor]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /tor/circuit:
+    get:
+      summary: Circuito Tor actual (auth)
+      tags: [tor]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /tor/iptables-enable:
+    post:
+      summary: Activar reglas iptables de Tor (admin)
+      tags: [tor]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /tor/iptables-disable:
+    post:
+      summary: Desactivar reglas iptables de Tor (admin)
+      tags: [tor]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /help/contact:
+    post:
+      summary: Registrar solicitud de ayuda/contacto
+      tags: [system]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: OK }
+  /setup-wizard/complete:
+    post:
+      summary: Finalizar asistente de configuración inicial
+      tags: [auth]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: Wizard completado }
+  /openapi.yaml:
+    get:
+      summary: Esta especificación OpenAPI
+      tags: [meta]
+      responses:
+        '200': { description: YAML de la API }
+  /translations/{lang}:
+    get:
+      summary: Traducciones de la UI por idioma
+      tags: [meta]
+      parameters:
+        - { name: lang, in: path, required: true, schema: { type: string, enum: [en, es] } }
+      responses:
+        '200': { description: JSON de traducciones }
 components:
   securitySchemes:
     cookieAuth:

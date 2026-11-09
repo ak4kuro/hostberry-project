@@ -12,7 +12,7 @@ SETUP_SUPPLICANT_CONF_FILE="/etc/wpa_supplicant/hostberry-wlan0-setup.conf"
 CONFIG_FILE="${INSTALL_DIR}/config.yaml"
 LOG_DIR="/var/log/hostberry"
 DATA_DIR="${INSTALL_DIR}/data"
-GITHUB_REPO="https://github.com/Hostberry-project/hostberry-project.git"
+GITHUB_REPO="https://github.com/ak4kuro/hostberry-project.git"
 TEMP_CLONE_DIR="/tmp/hostberry-install"
 
 # Secretos generados en instalación (JWT y password admin inicial)

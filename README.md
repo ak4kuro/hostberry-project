@@ -56,7 +56,7 @@ The installer **auto-detects your device** and downloads the right ready-made pr
 ### 🚀 Install (1 command)
 
 ```bash
-git clone https://github.com/Hostberry-project/hostberry-project.git
+git clone https://github.com/ak4kuro/hostberry-project.git
 cd hostberry-project
 sudo ./install.sh
 ```
@@ -118,7 +118,7 @@ El instalador **detecta tu dispositivo automáticamente** y descarga el programa
 ### 🚀 Instalar (1 comando)
 
 ```bash
-git clone https://github.com/Hostberry-project/hostberry-project.git
+git clone https://github.com/ak4kuro/hostberry-project.git
 cd hostberry-project
 sudo ./install.sh
 ```

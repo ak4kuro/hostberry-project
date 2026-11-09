@@ -17,7 +17,7 @@
 # Requisitos: curl, python3 y sha256sum.
 set -euo pipefail
 
-REPO="Hostberry-project/hostberry-project"
+REPO="ak4kuro/hostberry-project"
 SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SELF_DIR/../.." && pwd)"
 DIR="$REPO_ROOT/dist"

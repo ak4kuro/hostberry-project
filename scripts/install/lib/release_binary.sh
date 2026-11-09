@@ -1,7 +1,7 @@
 #!/bin/bash
 # Descarga binarios precompilados desde GitHub Releases (pure Go, sin CGO).
 
-HOSTBERRY_RELEASE_REPO="${HOSTBERRY_RELEASE_REPO:-Hostberry-project/hostberry-project}"
+HOSTBERRY_RELEASE_REPO="${HOSTBERRY_RELEASE_REPO:-ak4kuro/hostberry-project}"
 
 hostberry_detect_arch() {
     local machine
