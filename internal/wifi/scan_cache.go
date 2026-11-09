@@ -8,8 +8,8 @@ import (
 const scanCacheTTL = 18 * time.Second
 
 type scanCacheEntry struct {
-	networks  []map[string]interface{}
-	cachedAt  time.Time
+	networks      []map[string]interface{}
+	cachedAt      time.Time
 	interfaceName string
 	band          string
 }
@@ -20,6 +20,20 @@ var scanResultCache struct {
 }
 
 var scanOpMu sync.Mutex
+
+// scanFlightCall representa un escaneo en curso para una clave (interfaz+banda).
+// Los callers concurrentes esperan en done y comparten result: evitan
+// serializar dos escaneos idénticos (p. ej. prefetch + clic manual) y duplicar
+// el tiempo de espera. La radio sigue serializada por scanOpMu entre bandas.
+type scanFlightCall struct {
+	done   chan struct{}
+	result map[string]interface{}
+}
+
+var scanFlights = struct {
+	mu sync.Mutex
+	m  map[string]*scanFlightCall
+}{m: make(map[string]*scanFlightCall)}
 
 // getCachedScanNetworks devuelve la caché si coincide interfaz y banda. La banda forma parte de la
 // clave para no devolver redes 2.4 cuando se pide 5 GHz (o viceversa) durante el asistente.

@@ -125,18 +125,45 @@ func ScanWiFiNetworksBand(interfaceName string, refresh bool, bandOverride strin
 		}
 	}
 
-	scanOpMu.Lock()
-	defer scanOpMu.Unlock()
-
-	if !refresh {
-		if cached := getCachedScanNetworks(interfaceName, scanBand); len(cached) > 0 {
-			result["success"] = true
-			result["networks"] = cached
-			result["count"] = len(cached)
-			result["cached"] = true
+	// Singleflight por (interfaz, banda): los escaneos concurrentes idénticos
+	// comparten el resultado del líder en vez de hacer cada uno su propio
+	// escaneo completo (hasta ~50 s de espera + escaneo encadenados).
+	flightKey := interfaceName + "|" + scanBand
+	scanFlights.mu.Lock()
+	if call, ok := scanFlights.m[flightKey]; ok {
+		scanFlights.mu.Unlock()
+		select {
+		case <-call.done:
+			return call.result
+		case <-time.After(40 * time.Second):
+			result["success"] = false
+			result["error"] = "El escaneo está tardando demasiado. Inténtalo de nuevo."
+			result["networks"] = networks
+			result["count"] = 0
 			return result
 		}
 	}
+	call := &scanFlightCall{done: make(chan struct{})}
+	scanFlights.m[flightKey] = call
+	scanFlights.mu.Unlock()
+
+	scanOpMu.Lock()
+	result = runWiFiScan(interfaceName, scanBand)
+	scanOpMu.Unlock()
+
+	call.result = result
+	close(call.done)
+	scanFlights.mu.Lock()
+	delete(scanFlights.m, flightKey)
+	scanFlights.mu.Unlock()
+	return result
+}
+
+// runWiFiScan ejecuta las pasadas de escaneo (wpa_cli/iw) contra la radio.
+// Debe llamarse con scanOpMu tomado: serializa el acceso hardware entre bandas.
+func runWiFiScan(interfaceName, scanBand string) map[string]interface{} {
+	result := make(map[string]interface{})
+	networks := []map[string]interface{}{}
 
 	prepareWiFiInterfaceForScan(interfaceName)
 
