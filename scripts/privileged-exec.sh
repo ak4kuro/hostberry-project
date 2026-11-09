@@ -22,7 +22,7 @@ allowed_tokens=(
 	top free df nproc iwlist nmcli iw ip wg wg-quick systemctl pgrep
 	reboot shutdown poweroff rfkill ifconfig iwconfig
 	hostapd hostapd_cli dnsmasq iptables iptables-save netfilter-persistent sysctl tee cp mkdir echo chmod chown rm
-	dhclient udhcpc wpa_supplicant wpa_cli pkill killall true mount
+	dhclient udhcpc wpa_supplicant wpa_cli pkill killall true
 	udevadm
 	apt-get apt
 )

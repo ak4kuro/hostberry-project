@@ -45,13 +45,14 @@ const (
 	wpaCliScanBudgetLimited = 10 * time.Second
 )
 
-// execPrivilegedArgvTimeout ejecuta vía privileged-exec/argv (sin shell ni
-// caché para comandos de escritura; el helper decide el caché para lecturas).
+// execPrivilegedArgvTimeout ejecuta vía privileged-exec/argv (sin shell).
+// No usa caché: los sondeos de estado (wpa_cli, is-active, scans) deben ser
+// siempre frescos, igual que el antiguo execPrivilegedOutputTimeout.
 func execPrivilegedArgvTimeout(args []string, timeout time.Duration) (string, error) {
 	if len(args) == 0 {
 		return "", fmt.Errorf("comando vacío")
 	}
-	return utils.ExecuteArgvWithTimeout(args, timeout)
+	return utils.ExecuteArgvNoCache(args, timeout)
 }
 
 func execPrivilegedArgv(args ...string) (string, error) {

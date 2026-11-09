@@ -234,12 +234,23 @@ func ExecuteArgv(args ...string) (string, error) {
 // El caché solo aplica a invocaciones de solo lectura que terminan bien,
 // reutilizando la misma clasificación que la variante shell.
 func ExecuteArgvWithTimeout(args []string, timeout time.Duration) (string, error) {
+	return executeArgv(args, timeout, true)
+}
+
+// ExecuteArgvNoCache igual que ExecuteArgvWithTimeout pero nunca cachea el
+// resultado. Para sondeos de estado que deben ser siempre frescos (p. ej.
+// wpa_cli status, systemctl is-active tras una mutación).
+func ExecuteArgvNoCache(args []string, timeout time.Duration) (string, error) {
+	return executeArgv(args, timeout, false)
+}
+
+func executeArgv(args []string, timeout time.Duration, allowCache bool) (string, error) {
 	if err := validateArgvAllowList(args); err != nil {
 		return "", err
 	}
 
 	base := argvBase(args)
-	cacheable := isReadOnlyInvocation(base, args[1:])
+	cacheable := allowCache && isReadOnlyInvocation(base, args[1:])
 	cacheKey := strings.Join(args, "\x00") + "|" + timeout.String()
 
 	if cacheable {
