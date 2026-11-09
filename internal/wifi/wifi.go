@@ -183,7 +183,7 @@ func runWiFiScan(interfaceName, scanBand string) map[string]interface{} {
 			return
 		}
 		iwScanDone = true
-		if scanOut, err := runIwScanFast(interfaceName); err == nil {
+		if scanOut, err := runIwScanFast(interfaceName, scanDeadline); err == nil {
 			networks = parseIwScanOutput(scanOut, scanBand)
 		}
 	}
@@ -277,19 +277,27 @@ func isWiFiScanBusy(err error, output string) bool {
 	return false
 }
 
-func runIwScanFast(interfaceName string) (string, error) {
+func runIwScanFast(interfaceName string, deadline time.Time) (string, error) {
 	trigOut, trigErr := execPrivilegedArgvTimeout([]string{"iw", "dev", interfaceName, "scan", "trigger"}, iwScanPrivilegedTimeout)
 	trigText := strings.ToLower(strings.TrimSpace(trigOut))
 	if trigErr != nil || strings.Contains(trigText, "rejected") || strings.Contains(trigText, "busy") {
 		return "", fmt.Errorf("iw scan trigger no disponible: %v %s", trigErr, strings.TrimSpace(trigOut))
 	}
-	time.Sleep(1500 * time.Millisecond)
-	dumpOut, dumpErr := execPrivilegedArgvTimeout([]string{"iw", "dev", interfaceName, "scan", "dump"}, iwScanPrivilegedTimeout)
-	if dumpErr == nil && strings.TrimSpace(dumpOut) != "" {
-		return dumpOut, nil
-	}
-	if dumpErr != nil {
-		return dumpOut, dumpErr
+	// Un escaneo 5 GHz recorre ~25 canales (varios DFS en pasivo): 1.5 s no
+	// basta y el primer dump suele venir vacío. Sondear el dump varias veces
+	// hasta el deadline de la petición en lugar de una única lectura.
+	for i := 0; i < 4; i++ {
+		if !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(1500 * time.Millisecond)
+		if !time.Now().Before(deadline) {
+			break
+		}
+		dumpOut, dumpErr := execPrivilegedArgvTimeout([]string{"iw", "dev", interfaceName, "scan", "dump"}, iwScanPrivilegedTimeout)
+		if dumpErr == nil && strings.TrimSpace(dumpOut) != "" {
+			return dumpOut, nil
+		}
 	}
 	return "", fmt.Errorf("sin resultados de escaneo")
 }
@@ -413,13 +421,26 @@ func readWpaCliScanNetworks(interfaceName, socketDir string, band string, forceS
 		return nil
 	}
 
-	deadline := time.Now().Add(budget)
-	_, _ = runPrivilegedCommandFast(scanArgs...)
-	for time.Now().Before(deadline) {
-		if nets := fetch(); len(nets) > 0 {
-			return nets
+	pollResults := func(budget time.Duration, args ...string) []map[string]interface{} {
+		scanOut, scanErr := runPrivilegedCommandFast(args...)
+		// Si wpa_supplicant rechaza el scan (FAIL-BUSY: radio ocupada por el AP
+		// en otra banda, driver ocupado...), scan_results nunca se llenará.
+		// Seguir sondeando quemaría el presupuesto entero sin posibilidad de éxito.
+		if !wpaCliScanAccepted(scanOut, scanErr) {
+			return nil
 		}
-		time.Sleep(250 * time.Millisecond)
+		deadline := time.Now().Add(budget)
+		for time.Now().Before(deadline) {
+			if nets := fetch(); len(nets) > 0 {
+				return nets
+			}
+			time.Sleep(250 * time.Millisecond)
+		}
+		return nil
+	}
+
+	if nets := pollResults(budget, scanArgs...); len(nets) > 0 {
+		return nets
 	}
 
 	// Fallback de fiabilidad: un escaneo restringido a una banda DISTINTA a la que retiene el AP
@@ -436,16 +457,21 @@ func readWpaCliScanNetworks(interfaceName, socketDir string, band string, forceS
 			return nil
 		}
 		fullArgs := []string{"wpa_cli", "-i", interfaceName, "-p", socketDir, "scan"}
-		_, _ = runPrivilegedCommandFast(fullArgs...)
-		fullDeadline := time.Now().Add(fullBudget)
-		for time.Now().Before(fullDeadline) {
-			if nets := fetch(); len(nets) > 0 {
-				return nets
-			}
-			time.Sleep(250 * time.Millisecond)
+		if nets := pollResults(fullBudget, fullArgs...); len(nets) > 0 {
+			return nets
 		}
 	}
 	return nil
+}
+
+// wpaCliScanAccepted indica si wpa_supplicant aceptó el comando scan.
+// Un FAIL (p. ej. FAIL-BUSY) significa que no hay escaneo en curso: los
+// resultados nunca llegarán y conviene saltar al siguiente fallback.
+func wpaCliScanAccepted(out string, err error) bool {
+	if err != nil {
+		return false
+	}
+	return !strings.HasPrefix(strings.ToUpper(strings.TrimSpace(out)), "FAIL")
 }
 
 // scan24GHzFreqArg construye el argumento freq= para wpa_cli/SCAN con los canales 2.4 GHz (1-13).
