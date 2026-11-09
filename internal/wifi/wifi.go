@@ -174,6 +174,7 @@ func runWiFiScan(interfaceName, scanBand string) map[string]interface{} {
 	scanDeadline := time.Now().Add(25 * time.Second)
 
 	socketDir := wpaSupplicantSocketDir(interfaceName)
+	log.Printf("WiFi scan: iface=%s band=%q socketDir=%q concurrentAP=%v", interfaceName, scanBand, socketDir, concurrentAPInterfacePresent())
 
 	// iw scan trigger+dump es el fallback más caro (~13 s peor caso). Se ejecuta
 	// como máximo una vez por petición: repetirlo no aporta resultados nuevos.
@@ -185,6 +186,8 @@ func runWiFiScan(interfaceName, scanBand string) map[string]interface{} {
 		iwScanDone = true
 		if scanOut, err := runIwScanFast(interfaceName, scanDeadline); err == nil {
 			networks = parseIwScanOutput(scanOut, scanBand)
+		} else {
+			log.Printf("WiFi scan: iw fallback falló: %v", err)
 		}
 	}
 
@@ -224,6 +227,7 @@ func runWiFiScan(interfaceName, scanBand string) map[string]interface{} {
 		runIwScanOnce()
 	}
 
+	log.Printf("WiFi scan: resultado iface=%s band=%q redes=%d", interfaceName, scanBand, len(networks))
 	if len(networks) > 0 {
 		setCachedScanNetworks(interfaceName, scanBand, networks)
 		result["success"] = true
@@ -423,11 +427,15 @@ func readWpaCliScanNetworks(interfaceName, socketDir string, band string, forceS
 
 	pollResults := func(budget time.Duration, args ...string) []map[string]interface{} {
 		scanOut, scanErr := runPrivilegedCommandFast(args...)
-		// Si wpa_supplicant rechaza el scan (FAIL-BUSY: radio ocupada por el AP
-		// en otra banda, driver ocupado...), scan_results nunca se llenará.
-		// Seguir sondeando quemaría el presupuesto entero sin posibilidad de éxito.
-		if !wpaCliScanAccepted(scanOut, scanErr) {
-			return nil
+		log.Printf("WiFi scan: wpa_cli %s -> err=%v out=%q", strings.Join(args[len(args)-1:], " "), scanErr, strings.TrimSpace(scanOut))
+		outUpper := strings.ToUpper(strings.TrimSpace(scanOut))
+		// FAIL-BUSY significa que YA hay un escaneo en curso (p. ej. el prefetch
+		// o un clic anterior): scan_results se está llenando y conviene sondear.
+		// Otros FAIL (o error del comando) indican que no hay escaneo en curso:
+		// sondear el presupuesto entero sería tiempo muerto. Aun así hacemos una
+		// lectura por si scan_results conserva resultados de un escaneo previo.
+		if scanErr != nil || (!wpaCliScanAccepted(scanOut, scanErr) && !strings.Contains(outUpper, "FAIL-BUSY")) {
+			return fetch()
 		}
 		deadline := time.Now().Add(budget)
 		for time.Now().Before(deadline) {
