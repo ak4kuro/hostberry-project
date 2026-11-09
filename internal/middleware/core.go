@@ -230,6 +230,7 @@ func RequireAuth(c *fiber.Ctx) error {
 			if user, err := auth.BootstrapSetupSessionUser(c); err == nil && user != nil {
 				c.Locals("user", user)
 				c.Locals("user_id", user.ID)
+				c.Locals("auth_verified", true)
 				markWizardDirtyIfMutation(c)
 				return c.Next()
 			}
@@ -274,6 +275,7 @@ func RequireAuth(c *fiber.Ctx) error {
 				if user != nil {
 					c.Locals("user", user)
 					c.Locals("user_id", user.ID)
+					c.Locals("auth_verified", true)
 					return c.Next()
 				}
 			}
@@ -314,6 +316,7 @@ func RequireAuth(c *fiber.Ctx) error {
 
 	c.Locals("user", &user)
 	c.Locals("user_id", user.ID)
+	c.Locals("auth_verified", true)
 
 	if redirect := enforceWebOnboarding(c, &user); redirect != nil {
 		return redirect

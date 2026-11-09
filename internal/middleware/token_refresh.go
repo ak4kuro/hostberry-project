@@ -36,6 +36,13 @@ func RefreshSessionCookieMiddleware(c *fiber.Ctx) error {
 	if time.Until(claims.ExpiresAt.Time) > tokenRefreshThreshold {
 		return nil
 	}
+	// Solo se refresca cuando la ruta autenticó al usuario de verdad: RequireAuth
+	// marca "auth_verified" tras validar el JWT contra la BD (o tras emitir la
+	// sesión de bootstrap del asistente inicial). Así un futuro middleware que
+	// poblar "user" sin autenticar no podría obtener un token renovado.
+	if c.Locals("auth_verified") != true {
+		return nil
+	}
 	user, ok := GetUser(c)
 	if !ok || user == nil {
 		return nil

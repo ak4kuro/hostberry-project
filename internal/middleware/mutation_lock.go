@@ -14,12 +14,29 @@ var (
 	mutationLocksMu sync.Mutex
 )
 
+// mutationLockMaxEntries acota el mapa de locks. Las claves actuales son
+// constantes, pero si alguna vez se usara una clave controlada por el cliente
+// el mapa no debe crecer sin límite.
+const mutationLockMaxEntries = 128
+
 func getMutationLock(key string) chan struct{} {
 	mutationLocksMu.Lock()
 	defer mutationLocksMu.Unlock()
 
 	if ch, ok := mutationLocks[key]; ok {
 		return ch
+	}
+
+	// Limpieza perezosa: eliminar canales ociosos (token disponible = sin
+	// operación en curso). Un canal ocupado nunca se borra, por lo que dos
+	// peticiones concurrentes no pueden obtener locks distintos para la
+	// misma clave.
+	if len(mutationLocks) >= mutationLockMaxEntries {
+		for k, ch := range mutationLocks {
+			if len(ch) == 1 {
+				delete(mutationLocks, k)
+			}
+		}
 	}
 
 	ch := make(chan struct{}, 1)
@@ -60,4 +77,3 @@ func MutationLock(resource string, timeout time.Duration) fiber.Handler {
 		}
 	}
 }
-

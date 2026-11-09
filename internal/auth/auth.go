@@ -245,30 +245,3 @@ func Register(username, password, email string) (*models.User, error) {
 	}
 	return &user, nil
 }
-
-// RegisterBootstrap crea el usuario inicial sin validar fortaleza de contraseña.
-func RegisterBootstrap(username, password, email string) (*models.User, error) {
-	if username == "" || password == "" {
-		return nil, errors.New("usuario y contraseña no pueden estar vacíos")
-	}
-	if err := validators.ValidateUsername(username); err != nil {
-		return nil, err
-	}
-	var existingUser models.User
-	if err := database.DB.Where("username = ?", username).First(&existingUser).Error; err == nil {
-		return nil, errors.New("el usuario ya existe")
-	}
-	hashedPassword, err := HashPassword(password)
-	if err != nil {
-		return nil, fmt.Errorf("error hasheando contraseña: %v", err)
-	}
-	user := models.User{
-		Username: username, Password: hashedPassword, Email: email,
-		Role: "admin", Timezone: "UTC", IsActive: true, TokenVersion: 1,
-		FirstLoginCompleted: false,
-	}
-	if err := database.DB.Create(&user).Error; err != nil {
-		return nil, fmt.Errorf("error creando usuario en BD: %v", err)
-	}
-	return &user, nil
-}

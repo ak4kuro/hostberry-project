@@ -1,6 +1,8 @@
 package system
 
 import (
+	"path/filepath"
+
 	"github.com/gofiber/fiber/v2"
 	"hostberry/internal/database"
 	middleware "hostberry/internal/middleware"
@@ -14,8 +16,11 @@ func SystemBackupHandler(c *fiber.Ctx) error {
 			"error":   err.Error(),
 		})
 	}
+	// Solo se devuelve el nombre del archivo: la ruta absoluta revela la
+	// estructura de instalación y no la necesita el cliente.
+	name := filepath.Base(path)
 	user, _ := middleware.GetUser(c)
-	msg := "Backup creado: " + path
+	msg := "Backup creado: " + name
 	if user != nil {
 		uid := user.ID
 		_ = database.InsertLog("INFO", database.LogMsg("Backup del sistema creado", user.Username), "system", &uid)
@@ -23,7 +28,7 @@ func SystemBackupHandler(c *fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"success": true,
 		"message": msg,
-		"path":    path,
+		"file":    name,
 	})
 }
 
