@@ -2,9 +2,7 @@ package templates
 
 import (
 	"embed"
-	"encoding/json"
 	"fmt"
-	"html/template"
 	"io/fs"
 	"log"
 	"net/http"
@@ -30,14 +28,6 @@ func registerTemplateFuncs(engine *html.Engine) {
 			return defaultValue[0]
 		}
 		return key
-	})
-
-	engine.AddFunc("json", func(v interface{}) template.HTML {
-		b, err := json.Marshal(v)
-		if err != nil {
-			return template.HTML("{}")
-		}
-		return template.HTML(b)
 	})
 
 	engine.AddFunc("eq", func(a, b interface{}) bool {
@@ -328,4 +318,3 @@ func RenderTemplate(c *fiber.Ctx, name string, data fiber.Map) error {
 
 // --- compat helpers (no-op wrappers are intentionally omitted) ---
 // En caso de necesitar copia/transferencia de static files, dejarlo en `main` (depende del runtime y del embed).
-

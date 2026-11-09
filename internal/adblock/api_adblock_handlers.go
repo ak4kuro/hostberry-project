@@ -3,9 +3,9 @@ package adblock
 import (
 	"github.com/gofiber/fiber/v2"
 
+	i18n "hostberry/internal/i18n"
 	"hostberry/internal/middleware"
 	"hostberry/internal/models"
-	i18n "hostberry/internal/i18n"
 	webtemplates "hostberry/internal/templates"
 )
 
@@ -113,7 +113,8 @@ func BlockyDisableHandler(c *fiber.Ctx) error {
 func BlockyAPIProxyHandler(c *fiber.Ctx) error {
 	path := c.Params("*")
 	if path == "" {
-		path = c.Path()
+		// Petición a /blocky/api sin subruta: proxy a la raíz de la API de Blocky.
+		path = "/"
 	}
 
 	method := c.Method()
@@ -136,4 +137,3 @@ func AdblockPageHandler(c *fiber.Ctx) error {
 		"Title": i18n.T(c, "adblock.overview", "AdBlock (Blocky)"),
 	})
 }
-
