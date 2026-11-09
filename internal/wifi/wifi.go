@@ -40,9 +40,13 @@ func runSudoSilently(args ...string) error {
 
 const (
 	wpaCliPrivilegedTimeout = 8 * time.Second
-	iwScanPrivilegedTimeout = 8 * time.Second
-	wpaCliScanBudget        = 10 * time.Second
-	wpaCliScanBudgetLimited = 10 * time.Second
+	iwScanPrivilegedTimeout = 6 * time.Second
+	// Presupuestos de escaneo acotados: el wizard aborta la petición a los 45 s
+	// y el servidor tiene write_timeout ~30 s. Un escaneo 5 GHz en radio única
+	// puede encadenar wpa_cli (2 pasadas) + iw + wpa_cli sin banda; con 10 s por
+	// pasada el total superaba ambos límites y el usuario veía "tarda mucho".
+	wpaCliScanBudget        = 7 * time.Second
+	wpaCliScanBudgetLimited = 7 * time.Second
 )
 
 // execPrivilegedArgvTimeout ejecuta vía privileged-exec/argv (sin shell).
@@ -136,56 +140,61 @@ func ScanWiFiNetworksBand(interfaceName string, refresh bool, bandOverride strin
 
 	prepareWiFiInterfaceForScan(interfaceName)
 
+	// Presupuesto total de la petición: el wizard aborta a los 45 s y el servidor
+	// corta la escritura ~30 s. Las pasadas de escaneo se encadenan (wpa_cli
+	// restringido + completo + iw + wpa_cli sin banda); sin tope global un escaneo
+	// 5 GHz sin resultados tardaba ~65 s y el usuario veía un error de timeout.
+	scanDeadline := time.Now().Add(25 * time.Second)
+
 	socketDir := wpaSupplicantSocketDir(interfaceName)
 
-	// En AP+STA (brcmfmac) wpa_cli escanea bien con hostapd activo; iw scan trigger suele ser
-	// rechazado ("command rejected") y el dump cacheado puede filtrarse a 0 redes.
-	if concurrentAPInterfacePresent() && socketDir != "" {
-		networks = readWpaCliScanNetworks(interfaceName, socketDir, scanBand, true)
-		if len(networks) == 0 {
-			time.Sleep(400 * time.Millisecond)
-			networks = readWpaCliScanNetworks(interfaceName, socketDir, scanBand, true)
+	// iw scan trigger+dump es el fallback más caro (~13 s peor caso). Se ejecuta
+	// como máximo una vez por petición: repetirlo no aporta resultados nuevos.
+	iwScanDone := false
+	runIwScanOnce := func() {
+		if iwScanDone || !time.Now().Before(scanDeadline) {
+			return
 		}
-	}
-
-	if len(networks) == 0 && concurrentAPInterfacePresent() {
+		iwScanDone = true
 		if scanOut, err := runIwScanFast(interfaceName); err == nil {
 			networks = parseIwScanOutput(scanOut, scanBand)
 		}
+	}
+
+	// En AP+STA (brcmfmac) wpa_cli escanea bien con hostapd activo; iw scan trigger suele ser
+	// rechazado ("command rejected") y el dump cacheado puede filtrarse a 0 redes.
+	// Una sola llamada: readWpaCliScanNetworks ya reintenta por dentro (banda
+	// restringida → escaneo completo), repetirla solo duplicaba el tiempo de espera.
+	if concurrentAPInterfacePresent() && socketDir != "" && time.Now().Before(scanDeadline) {
+		networks = readWpaCliScanNetworks(interfaceName, socketDir, scanBand, true, scanDeadline)
+	}
+
+	if len(networks) == 0 && concurrentAPInterfacePresent() && time.Now().Before(scanDeadline) {
+		runIwScanOnce()
 	}
 
 	// Sin AP concurrente, o si lo anterior falló: wpa_cli sin socket previo o iw completo.
 	if socketDir == "" {
 		socketDir = wpaSupplicantSocketDir(interfaceName)
 	}
-	if len(networks) == 0 && socketDir != "" && !concurrentAPInterfacePresent() {
-		networks = readWpaCliScanNetworks(interfaceName, socketDir, scanBand, false)
-		if len(networks) == 0 {
-			networks = readWpaCliScanNetworks(interfaceName, socketDir, scanBand, true)
-		}
-		// Reintento automático: en AP+STA el primer escaneo puede salir vacío si la radio
-		// estaba ocupada por el AP; reintentamos una vez antes de dar error.
-		if len(networks) == 0 {
-			time.Sleep(500 * time.Millisecond)
-			networks = readWpaCliScanNetworks(interfaceName, socketDir, scanBand, true)
+	if len(networks) == 0 && socketDir != "" && !concurrentAPInterfacePresent() && time.Now().Before(scanDeadline) {
+		networks = readWpaCliScanNetworks(interfaceName, socketDir, scanBand, false, scanDeadline)
+		if len(networks) == 0 && time.Now().Before(scanDeadline) {
+			networks = readWpaCliScanNetworks(interfaceName, socketDir, scanBand, true, scanDeadline)
 		}
 	}
 
-	if len(networks) == 0 && scanBand != "" {
+	if len(networks) == 0 && scanBand != "" && time.Now().Before(scanDeadline) {
 		// Fallback: escaneo completo si el limitado por banda no devolvió nada (p. ej. hostapd.conf desactualizado).
 		if socketDir != "" {
-			networks = readWpaCliScanNetworks(interfaceName, socketDir, "", true)
+			networks = readWpaCliScanNetworks(interfaceName, socketDir, "", true, scanDeadline)
 			networks = filterScanNetworksByBand(networks, scanBand)
 		}
-		if len(networks) == 0 {
-			if scanOut, err := runIwScanFast(interfaceName); err == nil {
-				networks = parseIwScanOutput(scanOut, scanBand)
-			}
+		if len(networks) == 0 && time.Now().Before(scanDeadline) {
+			runIwScanOnce()
 		}
-	} else if len(networks) == 0 && scanBand == "" {
-		if scanOut, err := runIwScanFast(interfaceName); err == nil {
-			networks = parseIwScanOutput(scanOut, "")
-		}
+	} else if len(networks) == 0 && scanBand == "" && time.Now().Before(scanDeadline) {
+		runIwScanOnce()
 	}
 
 	if len(networks) > 0 {
@@ -256,34 +265,6 @@ func runIwScanFast(interfaceName string) (string, error) {
 		return dumpOut, dumpErr
 	}
 	return "", fmt.Errorf("sin resultados de escaneo")
-}
-
-func runIwScan(interfaceName string) (string, error) {
-	scanOut, err := execPrivilegedArgv("iw", "dev", interfaceName, "scan")
-	if err == nil && strings.TrimSpace(scanOut) != "" {
-		return scanOut, nil
-	}
-	lastErr := err
-
-	if _, trigErr := execPrivilegedArgv("iw", "dev", interfaceName, "scan", "trigger"); trigErr != nil {
-		if lastErr == nil {
-			lastErr = trigErr
-		}
-	}
-	time.Sleep(4 * time.Second)
-
-	dumpOut, dumpErr := execPrivilegedArgv("iw", "dev", interfaceName, "scan", "dump")
-	if dumpErr == nil && strings.TrimSpace(dumpOut) != "" {
-		return dumpOut, nil
-	}
-
-	if lastErr != nil {
-		return scanOut, lastErr
-	}
-	if dumpErr != nil {
-		return dumpOut, dumpErr
-	}
-	return scanOut, fmt.Errorf("sin resultados de escaneo")
 }
 
 func parseIwScanOutput(raw string, band string) []map[string]interface{} {
@@ -363,7 +344,7 @@ func wpaSupplicantSocketDir(interfaceName string) string {
 	return ""
 }
 
-func readWpaCliScanNetworks(interfaceName, socketDir string, band string, forceScan bool) []map[string]interface{} {
+func readWpaCliScanNetworks(interfaceName, socketDir string, band string, forceScan bool, scanDeadline time.Time) []map[string]interface{} {
 	if socketDir == "" {
 		return nil
 	}
@@ -397,6 +378,14 @@ func readWpaCliScanNetworks(interfaceName, socketDir string, band string, forceS
 		restricted = true
 	}
 
+	// Nunca esperar más allá del deadline global de la petición.
+	if remaining := time.Until(scanDeadline); remaining < budget {
+		budget = remaining
+	}
+	if budget <= 0 {
+		return nil
+	}
+
 	deadline := time.Now().Add(budget)
 	_, _ = runPrivilegedCommandFast(scanArgs...)
 	for time.Now().Before(deadline) {
@@ -412,9 +401,16 @@ func readWpaCliScanNetworks(interfaceName, socketDir string, band string, forceS
 	// falla". Reintentamos con un escaneo COMPLETO (sin freq=), que el driver sí acepta con el AP
 	// activo, y filtramos el resultado por la banda elegida (fetch ya aplica el filtro de banda).
 	if restricted {
+		fullBudget := wpaCliScanBudget
+		if remaining := time.Until(scanDeadline); remaining < fullBudget {
+			fullBudget = remaining
+		}
+		if fullBudget <= 0 {
+			return nil
+		}
 		fullArgs := []string{"wpa_cli", "-i", interfaceName, "-p", socketDir, "scan"}
 		_, _ = runPrivilegedCommandFast(fullArgs...)
-		fullDeadline := time.Now().Add(wpaCliScanBudget)
+		fullDeadline := time.Now().Add(fullBudget)
 		for time.Now().Before(fullDeadline) {
 			if nets := fetch(); len(nets) > 0 {
 				return nets
@@ -432,17 +428,6 @@ func scan24GHzFreqArg() string {
 		freqs = append(freqs, fmt.Sprintf("%d", 2412+(ch-1)*5))
 	}
 	return "freq=" + strings.Join(freqs, ",")
-}
-
-func scanWiFiWithWpaCli(interfaceName string, band string, forceScan bool) []map[string]interface{} {
-	socketDir := wpaSupplicantSocketDir(interfaceName)
-	if socketDir == "" {
-		socketDir = findWorkingWpaSupplicantSocket(interfaceName)
-	}
-	if socketDir == "" {
-		return nil
-	}
-	return readWpaCliScanNetworks(interfaceName, socketDir, band, forceScan)
 }
 
 func parseWpaCliScanResults(out string, band string) []map[string]interface{} {
