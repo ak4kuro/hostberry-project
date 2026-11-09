@@ -35,11 +35,18 @@ hostberry_release_tag() {
 
 # Devuelve 0 si instaló un binario válido en ${INSTALL_DIR}/hostberry
 hostberry_try_release_binary() {
+    # En modo update el fuente ya está actualizado (clone/pull de main): el
+    # binario de GitHub Releases puede ser más antiguo que main y desharía
+    # correcciones recientes. Nunca usarlo en update; compilar desde fuente.
+    if [ "${MODE:-}" = "update" ]; then
+        return 1
+    fi
+
     local use_release="${HOSTBERRY_USE_RELEASE_BINARY:-auto}"
     case "$use_release" in
         0|false|no|never) return 1 ;;
         auto|1|true|yes)
-            # install y update: intentar binario publicado antes de compilar
+            # install: intentar binario publicado antes de compilar
             ;;
     esac
 
