@@ -26,7 +26,7 @@ func TestValidateHostapdPOSTValid(t *testing.T) {
 
 func TestValidateHostapdPOSTInvalidChannel(t *testing.T) {
 	body := validHostapdBody()
-	body.Channel = 99
+	body.Channel = 200 // fuera de 2.4 GHz (1-14) y 5 GHz (36-165)
 	if err := validateHostapdPOST(&body); err == nil {
 		t.Fatal("expected channel validation error")
 	}

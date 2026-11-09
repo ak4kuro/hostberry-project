@@ -12,7 +12,8 @@ func TestNormalizeRole(t *testing.T) {
 		{"operator", true, RoleOperator},
 		{"ADMIN", true, RoleAdmin},
 		{"guest", false, "guest"},
-		{"", true, RoleAdmin},
+		// Un rol vacío NO debe ascender a admin (endurecido en c9f1856).
+		{"", false, ""},
 	}
 	for _, tc := range tests {
 		got, ok := NormalizeRole(tc.in)
