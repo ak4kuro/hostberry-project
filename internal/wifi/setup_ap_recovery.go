@@ -67,7 +67,7 @@ func RecoverSetupAPIfNeeded(staInterface string) bool {
 		profile.Country = country
 	}
 
-	content := renderHostapdConfig(apCSAInterface, profile, band24GHz, true)
+	content := renderHostapdConfig(apCSAInterface, profile, band24GHz)
 	if err := writePrivilegedHostapdConfig(hostapdActiveConfigPath, content); err != nil {
 		log.Printf("HostBerry: no se pudo escribir hostapd.conf de recuperación: %v", err)
 		return false

@@ -29,8 +29,10 @@ const (
 	hostapdMaxNumSTAKey = "max_num_sta"
 )
 
-// ApplySingleClientAPLimit ajusta hostapd y dnsmasq para permitir solo un cliente
-// en la red hostberry (max_num_sta=1 y un único lease DHCP) o restaura el rango normal.
+// ApplySingleClientAPLimit ajusta dnsmasq para usar un pool DHCP reducido con
+// lease corto durante el asistente (varios clientes, IPs liberadas al
+// desconectarse) o restaura el rango normal. El límite de estaciones
+// asociadas (max_num_sta) se elimina: ya no restringe el AP a un solo cliente.
 func ApplySingleClientAPLimit(enable bool) error {
 	if err := writeSingleClientLimitConfigs(enable); err != nil {
 		return err
@@ -154,9 +156,9 @@ func writeConfigFilePrivileged(path string, content []byte) error {
 }
 
 func mutateHostapdMaxNumSTA(content []byte, enable bool) []byte {
-	if enable {
-		return []byte(upsertConfigKey(string(content), hostapdMaxNumSTAKey, "1"))
-	}
+	// max_num_sta=1 limitaba el AP a un único cliente asociado y dejó obsoletas
+	// las configs generadas por versiones antiguas: eliminar la clave en ambos
+	// sentidos (setup y post-setup) repara instalaciones existentes.
 	return []byte(removeConfigKey(string(content), hostapdMaxNumSTAKey))
 }
 

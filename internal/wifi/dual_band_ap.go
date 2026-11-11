@@ -155,7 +155,7 @@ func secondaryPhy(primaryPhy string) string {
 	return ""
 }
 
-func renderHostapdConfig(iface string, profile DualBandAPProfile, band string, maxOneClient bool) string {
+func renderHostapdConfig(iface string, profile DualBandAPProfile, band string) string {
 	ch := profile.Channel
 	if ch <= 0 {
 		ch = defaultAPChannelForBand(band)
@@ -219,9 +219,6 @@ func renderHostapdConfig(iface string, profile DualBandAPProfile, band string, m
 		b.WriteString("wpa=0\n")
 	}
 
-	if maxOneClient {
-		b.WriteString("max_num_sta=1\n")
-	}
 	return b.String()
 }
 
@@ -331,9 +328,8 @@ func ensureDualBandHostapdImpl(staInterface string, setupPending bool, forcedBan
 
 	_ = SaveDualBandAPConfig(cfg)
 
-	maxOne := setupPending
-	content24 := renderHostapdConfig(apCSAInterface, cfg.Band24, band24GHz, maxOne)
-	content5 := renderHostapdConfig(apCSAInterface, cfg.Band5, band5GHz, maxOne)
+	content24 := renderHostapdConfig(apCSAInterface, cfg.Band24, band24GHz)
+	content5 := renderHostapdConfig(apCSAInterface, cfg.Band5, band5GHz)
 
 	if err := writeHostapdConfigFile(hostapd2GDataPath, content24); err != nil {
 		log.Printf("HostBerry dual-band: no se pudo escribir %s: %v", hostapd2GDataPath, err)
@@ -354,7 +350,7 @@ func ensureDualBandHostapdImpl(staInterface string, setupPending bool, forcedBan
 	if coldStartSetup && (activeProfile.Channel < 1 || activeProfile.Channel > 14) {
 		activeProfile.Channel = 6
 	}
-	activeContent := renderHostapdConfig(apCSAInterface, activeProfile, activeBand, maxOne)
+	activeContent := renderHostapdConfig(apCSAInterface, activeProfile, activeBand)
 	if err := writePrivilegedHostapdConfig(hostapdActiveConfigPath, activeContent); err != nil {
 		result["success"] = false
 		result["error"] = err.Error()
@@ -374,7 +370,7 @@ func ensureDualBandHostapdImpl(staInterface string, setupPending bool, forcedBan
 		result["dual_radio"] = true
 		otherBand := complementaryBand(activeBand)
 		otherProfile := cfg.ProfileForBand(otherBand)
-		otherContent := renderHostapdConfig(secondaryAPInterface, otherProfile, otherBand, maxOne)
+		otherContent := renderHostapdConfig(secondaryAPInterface, otherProfile, otherBand)
 		otherPath := hostapd2GDataPath
 		if otherBand == band5GHz {
 			otherPath = hostapd5GDataPath

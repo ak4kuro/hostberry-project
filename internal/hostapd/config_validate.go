@@ -53,7 +53,7 @@ func hwModeForChannel(ch int) string {
 // renderLegacyHostapdConfig genera el contenido de hostapd.conf para el endpoint
 // single-band /hostapd/config. Función pura: los valores ya vienen validados por
 // validateHostapdPOST y se sanitizan de nuevo por defensa en profundidad.
-func renderLegacyHostapdConfig(req HostapdConfigBody, apInterface string, maxOneClient bool) string {
+func renderLegacyHostapdConfig(req HostapdConfigBody, apInterface string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, `interface=%s
 driver=nl80211
@@ -89,9 +89,6 @@ rsn_pairwise=CCMP
 `, sanitizeHostapdConfValue(req.Password))
 	}
 
-	if maxOneClient {
-		b.WriteString("max_num_sta=1\n")
-	}
 	return b.String()
 }
 

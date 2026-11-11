@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"hostberry/internal/auth"
 	"hostberry/internal/constants"
 	"hostberry/internal/utils"
 	"hostberry/internal/validators"
@@ -1232,7 +1231,7 @@ RUN+="/bin/ip link set ap0 address %s"
 
 	_, _ = executeArgv("mkdir", "-p", "/etc/hostapd")
 
-	configContent := renderLegacyHostapdConfig(req, apInterface, auth.IsInitialSetupPending())
+	configContent := renderLegacyHostapdConfig(req, apInterface)
 
 	tmpF, tmpErr := os.CreateTemp("", "hostberry-hostapd-*")
 	if tmpErr != nil {
@@ -1339,9 +1338,6 @@ RUN+="/bin/ip link set ap0 address %s"
 
 	dhcpStart := req.DHCPRangeStart
 	dhcpEnd := req.DHCPRangeEnd
-	if auth.IsInitialSetupPending() {
-		dhcpEnd = dhcpStart
-	}
 
 	dnsmasqManaged := fmt.Sprintf(`except-interface=lo
 bind-interfaces
